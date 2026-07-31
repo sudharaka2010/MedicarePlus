@@ -2,28 +2,20 @@ package com.medicareplus.app;
 
 import com.medicareplus.db.DBInitializer;
 import com.medicareplus.ui.DashboardFrame;
+import com.medicareplus.ui.UITheme;
 
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 
 public class Main {
 
     public static void main(String[] args) {
+        UITheme.install();
 
-        SwingUtilities.invokeLater(() -> {
-            try {
-                UIManager.setLookAndFeel(
-                        UIManager.getSystemLookAndFeelClassName()
-                );
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        // Prepare the local schema before the Swing event thread begins painting.
+        DBInitializer.createTables();
 
-            // Create required tables
-            DBInitializer.createTables();
-
-            // Launch dashboard
-            new DashboardFrame().setVisible(true);
-        });
+        SwingUtilities.invokeLater(
+                () -> new DashboardFrame().setVisible(true)
+        );
     }
 }

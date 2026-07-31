@@ -10,576 +10,850 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
-import javax.swing.table.JTableHeader;
+import javax.swing.table.TableRowSorter;
 import java.awt.*;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.KeyEvent;
 import java.awt.print.PrinterException;
 import java.text.DecimalFormat;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
 
 public class BillingFrame extends JFrame {
 
     private final PatientDAO patientDAO = new PatientDAO();
     private final BillDAO billDAO = new BillDAO();
+    private final DecimalFormat amountFormat = new DecimalFormat("#,##0.00");
+    private final Map<Integer, String> patientNames = new HashMap<>();
 
     private JComboBox<PatientItem> patientBox;
-    private JLabel lblAdvance;
-    private JTextField txtTotal;
-    private JCheckBox chkUseAdvance;
-    private JLabel lblAdvanceUsed;
-    private JLabel lblPayable;
-    private JTextArea txtNotes;
+    private JLabel advanceBalanceValue;
+    private JTextField totalField;
+    private JCheckBox useAdvanceCheck;
+    private JLabel advanceUsedValue;
+    private JLabel payableValue;
+    private JTextArea notesArea;
 
     private JTable table;
     private DefaultTableModel model;
-
-    private final DecimalFormat df = new DecimalFormat("#0.00");
+    private TableRowSorter<DefaultTableModel> sorter;
+    private UITheme.SearchField searchField;
+    private JLabel recordCount;
+    private UITheme.Button previewButton;
+    private UITheme.Button printButton;
+    private UITheme.TableView tableView;
 
     public BillingFrame() {
-        setTitle("MediCare Plus - Billing");
-        setSize(1200, 720);
-        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        setLocationRelativeTo(null);
+        UITheme.configureFrame(this, "Billing & payments", 1340, 800);
 
-        JPanel root = new GradientPanel();
-        root.setLayout(new BorderLayout(18, 18));
-        root.setBorder(new EmptyBorder(22, 22, 22, 22));
+        UITheme.BackgroundPanel root = new UITheme.BackgroundPanel();
+        root.setLayout(new BorderLayout(0, 18));
+        root.setBorder(new EmptyBorder(23, 25, 24, 25));
 
-        // -------- Header --------
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        root.add(UITheme.createHeader(
+                "Billing & payments",
+                "Create accurate statements, apply patient advances, and review billing history.",
+                createHeaderStatus()
+        ), BorderLayout.NORTH);
+        root.add(UITheme.pageScroll(createWorkspace()), BorderLayout.CENTER);
+        setContentPane(root);
 
-        JLabel title = new JLabel("Billing");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 28));
-        title.setForeground(new Color(25, 25, 25));
+        loadPatientsToCombo();
+        loadBills();
+        wireShortcuts();
+    }
 
-        JLabel subtitle = new JLabel("Create bills, use advance payments, preview and print");
-        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        subtitle.setForeground(new Color(80, 80, 80));
+    private JComponent createHeaderStatus() {
+        JPanel status = new JPanel(new FlowLayout(FlowLayout.RIGHT, 7, 0));
+        status.setOpaque(false);
+        JLabel dot = new JLabel("●");
+        dot.setForeground(UITheme.SUCCESS);
+        dot.setFont(UITheme.font(Font.BOLD, 11));
+        JLabel text = UITheme.mutedLabel("Local billing records");
+        status.add(dot);
+        status.add(text);
+        return status;
+    }
 
-        JPanel titleBox = new JPanel();
-        titleBox.setOpaque(false);
-        titleBox.setLayout(new BoxLayout(titleBox, BoxLayout.Y_AXIS));
-        titleBox.add(title);
-        titleBox.add(Box.createVerticalStrut(4));
-        titleBox.add(subtitle);
+    private JComponent createWorkspace() {
+        ResponsiveWorkspace workspace = new ResponsiveWorkspace();
+        workspace.setOpaque(false);
 
-        header.add(titleBox, BorderLayout.WEST);
-        root.add(header, BorderLayout.NORTH);
+        JComponent billForm = createBillForm();
+        JComponent billTable = createBillTable();
+        boolean[] stacked = {false};
+        arrangeWorkspace(workspace, billForm, billTable, false);
+        workspace.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                boolean shouldStack = workspace.getWidth() < 1120;
+                if (shouldStack == stacked[0]) {
+                    return;
+                }
+                stacked[0] = shouldStack;
+                arrangeWorkspace(workspace, billForm, billTable, shouldStack);
+            }
+        });
+        return workspace;
+    }
 
-        // -------- Left: Create Bill Panel --------
-        RoundedPanel formCard = new RoundedPanel(22);
-        formCard.setLayout(new BorderLayout(12, 12));
-        formCard.setBackground(new Color(255, 255, 255, 210));
-        formCard.setBorder(new EmptyBorder(14, 14, 14, 14));
+    private void arrangeWorkspace(JPanel workspace, JComponent billForm,
+                                  JComponent billTable, boolean stacked) {
+        workspace.removeAll();
 
-        JLabel formTitle = new JLabel("Create New Bill");
-        formTitle.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        GridBagConstraints formConstraints = new GridBagConstraints();
+        formConstraints.gridx = 0;
+        formConstraints.gridy = 0;
+        formConstraints.weightx = stacked ? 1 : 0.34;
+        formConstraints.weighty = stacked ? 0 : 1;
+        formConstraints.fill = GridBagConstraints.BOTH;
+        formConstraints.insets = stacked
+                ? new Insets(0, 0, 14, 0)
+                : new Insets(0, 0, 0, 14);
+        workspace.add(billForm, formConstraints);
 
-        formCard.add(formTitle, BorderLayout.NORTH);
+        GridBagConstraints tableConstraints = new GridBagConstraints();
+        tableConstraints.gridx = stacked ? 0 : 1;
+        tableConstraints.gridy = stacked ? 1 : 0;
+        tableConstraints.weightx = stacked ? 1 : 0.66;
+        tableConstraints.weighty = stacked ? 0 : 1;
+        tableConstraints.fill = GridBagConstraints.BOTH;
+        workspace.add(billTable, tableConstraints);
+        workspace.revalidate();
+        workspace.repaint();
+    }
 
-        JPanel form = new JPanel();
+    private JComponent createBillForm() {
+        UITheme.CardPanel card = new UITheme.CardPanel(20);
+        card.setLayout(new BorderLayout(0, 15));
+        card.setPreferredSize(new Dimension(410, 570));
+
+        JPanel heading = new JPanel();
+        heading.setOpaque(false);
+        heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
+        heading.add(UITheme.sectionLabel("Create a new bill"));
+        heading.add(Box.createVerticalStrut(3));
+        heading.add(UITheme.mutedLabel("Amounts recalculate automatically."));
+        card.add(heading, BorderLayout.NORTH);
+
+        JPanel form = new JPanel(new GridBagLayout());
         form.setOpaque(false);
-        form.setLayout(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(8, 8, 8, 8);
-        c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 0;
-        c.gridy = 0;
-
-        // Patient dropdown
-        form.add(new JLabel("Patient:"), c);
-        c.gridx = 1;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTHWEST;
 
         patientBox = new JComboBox<>();
-        patientBox.setPreferredSize(new Dimension(320, 34));
-        patientBox.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        form.add(patientBox, c);
+        patientBox.setToolTipText("Select the patient receiving this bill");
+        UITheme.styleField(patientBox);
+        addField(form, c, 0, "Patient", patientBox);
 
-        // Advance label
-        c.gridy++;
-        c.gridx = 0;
-        form.add(new JLabel("Advance Balance:"), c);
-        c.gridx = 1;
-
-        lblAdvance = new JLabel("0.00");
-        lblAdvance.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        lblAdvance.setForeground(new Color(22, 120, 60));
-        form.add(lblAdvance, c);
-
-        // Total amount
-        c.gridy++;
-        c.gridx = 0;
-        form.add(new JLabel("Total Amount:"), c);
-        c.gridx = 1;
-
-        txtTotal = new JTextField();
-        txtTotal.setPreferredSize(new Dimension(320, 34));
-        txtTotal.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        txtTotal.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(210, 214, 222)),
-                new EmptyBorder(6, 10, 6, 10)
+        JPanel balancePanel = new JPanel(new BorderLayout(10, 0));
+        balancePanel.setBackground(UITheme.PRIMARY_SOFT);
+        balancePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(189, 223, 219)),
+                new EmptyBorder(10, 12, 10, 12)
         ));
-        form.add(txtTotal, c);
+        JLabel balanceLabel = new JLabel("Available advance");
+        balanceLabel.setFont(UITheme.font(Font.BOLD, 12));
+        balanceLabel.setForeground(UITheme.PRIMARY_DARK);
+        advanceBalanceValue = new JLabel("0.00");
+        advanceBalanceValue.setFont(UITheme.font(Font.BOLD, 18));
+        advanceBalanceValue.setForeground(UITheme.PRIMARY_DARK);
+        balancePanel.add(balanceLabel, BorderLayout.WEST);
+        balancePanel.add(advanceBalanceValue, BorderLayout.EAST);
+        c.gridy = 2;
+        c.insets = new Insets(2, 0, 9, 0);
+        form.add(balancePanel, c);
 
-        // Use advance checkbox
-        c.gridy++;
-        c.gridx = 0;
-        form.add(new JLabel("Use Advance:"), c);
-        c.gridx = 1;
+        totalField = UITheme.textField();
+        totalField.setToolTipText("Enter the full amount before advance payment");
+        addField(form, c, 3, "Total amount", totalField);
 
-        chkUseAdvance = new JCheckBox("Apply advance to reduce payable");
-        chkUseAdvance.setOpaque(false);
-        chkUseAdvance.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        form.add(chkUseAdvance, c);
+        useAdvanceCheck = new JCheckBox("Apply the available advance to this bill");
+        useAdvanceCheck.setOpaque(false);
+        useAdvanceCheck.setFont(UITheme.font(Font.PLAIN, 13));
+        useAdvanceCheck.setForeground(UITheme.TEXT);
+        useAdvanceCheck.setToolTipText("The applied amount will never exceed the bill total");
+        c.gridy = 5;
+        c.insets = new Insets(1, 0, 8, 0);
+        form.add(useAdvanceCheck, c);
 
-        // Advance used
-        c.gridy++;
-        c.gridx = 0;
-        form.add(new JLabel("Advance Used:"), c);
-        c.gridx = 1;
+        JPanel totals = new JPanel(new GridLayout(1, 2, 9, 0));
+        totals.setOpaque(false);
+        advanceUsedValue = new JLabel("0.00");
+        payableValue = new JLabel("0.00");
+        totals.add(amountTile("Advance used", advanceUsedValue, UITheme.INFO_SOFT, UITheme.INFO));
+        totals.add(amountTile(
+                "Amount payable", payableValue, UITheme.PRIMARY_SOFT, UITheme.PRIMARY_DARK
+        ));
+        c.gridy = 6;
+        c.insets = new Insets(2, 0, 9, 0);
+        form.add(totals, c);
 
-        lblAdvanceUsed = new JLabel("0.00");
-        lblAdvanceUsed.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        lblAdvanceUsed.setForeground(new Color(32, 84, 240));
-        form.add(lblAdvanceUsed, c);
+        notesArea = new JTextArea(3, 20);
+        notesArea.setToolTipText("Optional billing notes");
+        JScrollPane notesScroll = UITheme.textAreaScroll(notesArea);
+        notesScroll.setPreferredSize(new Dimension(0, 88));
+        notesScroll.setMinimumSize(new Dimension(0, 72));
+        addField(form, c, 7, "Notes (optional)", notesScroll);
 
-        // Payable
-        c.gridy++;
-        c.gridx = 0;
-        form.add(new JLabel("Payable Amount:"), c);
-        c.gridx = 1;
+        c.gridy = 9;
+        c.weighty = 1;
+        c.fill = GridBagConstraints.BOTH;
+        c.insets = new Insets(0, 0, 0, 0);
+        form.add(Box.createGlue(), c);
+        card.add(form, BorderLayout.CENTER);
 
-        lblPayable = new JLabel("0.00");
-        lblPayable.setFont(new Font("Segoe UI", Font.BOLD, 16));
-        lblPayable.setForeground(new Color(180, 40, 40));
-        form.add(lblPayable, c);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
+        actions.setOpaque(false);
+        UITheme.Button save = UITheme.button(
+                "Save bill", UITheme.IconType.CHECK, UITheme.ButtonStyle.PRIMARY
+        );
+        UITheme.Button clear = UITheme.button(
+                "Clear", UITheme.ButtonStyle.GHOST
+        );
+        save.setToolTipText("Save this bill (Ctrl+S)");
+        clear.setToolTipText("Reset the billing form");
+        save.addActionListener(e -> saveBill());
+        clear.addActionListener(e -> clearForm());
+        actions.add(save);
+        actions.add(clear);
+        card.add(actions, BorderLayout.SOUTH);
 
-        // Notes
-        c.gridy++;
-        c.gridx = 0;
-        c.anchor = GridBagConstraints.NORTHWEST;
-        form.add(new JLabel("Notes:"), c);
-        c.gridx = 1;
+        patientBox.addActionListener(e -> refreshAdvanceLabel());
+        useAdvanceCheck.addActionListener(e -> recalculate());
+        totalField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                recalculate();
+            }
 
-        txtNotes = new JTextArea(4, 20);
-        txtNotes.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        txtNotes.setLineWrap(true);
-        txtNotes.setWrapStyleWord(true);
-        JScrollPane notesScroll = new JScrollPane(txtNotes);
-        notesScroll.setBorder(BorderFactory.createLineBorder(new Color(230, 233, 240)));
-        form.add(notesScroll, c);
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                recalculate();
+            }
 
-        formCard.add(form, BorderLayout.CENTER);
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                recalculate();
+            }
+        });
+        return card;
+    }
 
-        // Buttons bottom
-        JPanel formButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        formButtons.setOpaque(false);
+    private void addField(JPanel panel, GridBagConstraints c, int row,
+                          String labelText, JComponent field) {
+        JLabel label = new JLabel(labelText);
+        label.setFont(UITheme.font(Font.BOLD, 12));
+        label.setForeground(UITheme.TEXT_MUTED);
+        Component labelTarget = field;
+        if (field instanceof JScrollPane scrollPane
+                && scrollPane.getViewport().getView() != null) {
+            labelTarget = scrollPane.getViewport().getView();
+        }
+        label.setLabelFor(labelTarget);
+        if (labelTarget instanceof JComponent target) {
+            target.getAccessibleContext().setAccessibleName(labelText);
+        }
+        c.gridy = row;
+        c.weighty = 0;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.insets = new Insets(row == 0 ? 0 : 4, 1, 5, 1);
+        panel.add(label, c);
 
-        ModernButton btnSave = new ModernButton("Save Bill");
-        ModernButton btnClear = new ModernButton("Clear");
-        formButtons.add(btnSave);
-        formButtons.add(btnClear);
+        c.gridy = row + 1;
+        c.insets = new Insets(0, 0, 8, 0);
+        panel.add(field, c);
+    }
 
-        formCard.add(formButtons, BorderLayout.SOUTH);
+    private JComponent amountTile(String label, JLabel value, Color background, Color accent) {
+        JPanel tile = new JPanel();
+        tile.setLayout(new BoxLayout(tile, BoxLayout.Y_AXIS));
+        tile.setBackground(background);
+        tile.setBorder(new EmptyBorder(9, 11, 9, 11));
 
-        // -------- Right: Bills table + actions --------
-        RoundedPanel tableCard = new RoundedPanel(22);
-        tableCard.setLayout(new BorderLayout(12, 12));
-        tableCard.setBackground(new Color(255, 255, 255, 210));
-        tableCard.setBorder(new EmptyBorder(14, 14, 14, 14));
+        JLabel name = new JLabel(label);
+        name.setFont(UITheme.font(Font.BOLD, 11));
+        name.setForeground(UITheme.TEXT_MUTED);
+        value.setFont(UITheme.font(Font.BOLD, 18));
+        value.setForeground(accent);
+        tile.add(name);
+        tile.add(Box.createVerticalStrut(3));
+        tile.add(value);
+        return tile;
+    }
 
-        JLabel listTitle = new JLabel("Bills");
-        listTitle.setFont(new Font("Segoe UI", Font.BOLD, 18));
-        tableCard.add(listTitle, BorderLayout.NORTH);
+    private JComponent createBillTable() {
+        UITheme.CardPanel card = new UITheme.CardPanel(20);
+        card.setLayout(new BorderLayout(0, 13));
+        card.setPreferredSize(new Dimension(700, 570));
+
+        JPanel heading = new JPanel(new BorderLayout(18, 0));
+        heading.setOpaque(false);
+        JPanel copy = new JPanel();
+        copy.setOpaque(false);
+        copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
+        copy.add(UITheme.sectionLabel("Billing history"));
+        copy.add(Box.createVerticalStrut(3));
+        copy.add(UITheme.mutedLabel("Most recent statements appear first."));
+        heading.add(copy, BorderLayout.WEST);
+
+        searchField = UITheme.searchField("Search bills or patients");
+        searchField.setToolTipText("Search by bill, patient, date, amount, or notes (Ctrl+F)");
+        heading.add(searchField, BorderLayout.EAST);
+        card.add(heading, BorderLayout.NORTH);
 
         model = new DefaultTableModel(
-                new Object[]{"Bill ID", "Patient ID", "Date", "Total", "Advance Used", "Payable", "Notes"},
+                new Object[]{"Bill #", "Patient", "Date", "Total", "Advance", "Payable", "Notes"},
                 0
         ) {
-            @Override public boolean isCellEditable(int row, int column) { return false; }
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                return switch (columnIndex) {
+                    case 0 -> Integer.class;
+                    case 3, 4, 5 -> Double.class;
+                    default -> String.class;
+                };
+            }
         };
 
         table = new JTable(model);
-        table.setRowHeight(30);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        table.setSelectionBackground(new Color(220, 232, 255));
-        table.setSelectionForeground(new Color(20, 20, 20));
-        table.setGridColor(new Color(230, 233, 240));
-        table.setShowVerticalLines(false);
+        UITheme.styleTable(table);
+        UITheme.setColumnWidths(table, 65, 180, 110, 95, 95, 100, 160);
+        table.setToolTipText("Double-click a bill to preview it");
+        table.getColumnModel().getColumn(3).setCellRenderer(new MoneyRenderer());
+        table.getColumnModel().getColumn(4).setCellRenderer(new MoneyRenderer());
+        table.getColumnModel().getColumn(5).setCellRenderer(new MoneyRenderer());
+        table.removeColumn(table.getColumnModel().getColumn(6));
 
-        JTableHeader th = table.getTableHeader();
-        th.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        th.setBackground(new Color(245, 246, 250));
-        th.setForeground(new Color(40, 40, 40));
+        sorter = new TableRowSorter<>(model);
+        table.setRowSorter(sorter);
+        tableView = new UITheme.TableView(
+                table,
+                UITheme.IconType.BILLING,
+                "No bills yet",
+                "Create a bill and it will appear in this history."
+        );
+        card.add(tableView, BorderLayout.CENTER);
 
-        JScrollPane tableScroll = new JScrollPane(table);
-        tableScroll.setBorder(BorderFactory.createLineBorder(new Color(230, 233, 240)));
-        tableCard.add(tableScroll, BorderLayout.CENTER);
+        JPanel footer = new JPanel(new BorderLayout(14, 0));
+        footer.setOpaque(false);
+        recordCount = UITheme.recordCountLabel();
+        footer.add(recordCount, BorderLayout.WEST);
 
-        JPanel tableButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        tableButtons.setOpaque(false);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        UITheme.Button refresh = UITheme.button(
+                "Refresh", UITheme.IconType.REFRESH, UITheme.ButtonStyle.GHOST
+        );
+        previewButton = UITheme.button(
+                "Preview", UITheme.IconType.REPORTS, UITheme.ButtonStyle.SECONDARY
+        );
+        printButton = UITheme.button(
+                "Print", UITheme.IconType.PRINT, UITheme.ButtonStyle.SECONDARY
+        );
+        refresh.setToolTipText("Reload billing history (Ctrl+R)");
+        previewButton.setToolTipText("Preview the selected bill");
+        printButton.setToolTipText("Print the selected bill");
+        previewButton.setEnabled(false);
+        printButton.setEnabled(false);
+        refresh.addActionListener(e -> loadBills());
+        previewButton.addActionListener(e -> previewSelectedBill());
+        printButton.addActionListener(e -> printSelectedBill());
+        actions.add(refresh);
+        actions.add(previewButton);
+        actions.add(printButton);
+        footer.add(actions, BorderLayout.EAST);
+        card.add(footer, BorderLayout.SOUTH);
 
-        ModernButton btnRefresh = new ModernButton("Refresh");
-        ModernButton btnPreview = new ModernButton("Preview");
-        ModernButton btnPrint = new ModernButton("Print");
-
-        tableButtons.add(btnRefresh);
-        tableButtons.add(btnPreview);
-        tableButtons.add(btnPrint);
-
-        tableCard.add(tableButtons, BorderLayout.SOUTH);
-
-        // -------- Layout split --------
-        JPanel center = new JPanel(new GridLayout(1, 2, 18, 18));
-        center.setOpaque(false);
-        center.add(formCard);
-        center.add(tableCard);
-
-        root.add(center, BorderLayout.CENTER);
-        setContentPane(root);
-
-        // -------- Events --------
-        loadPatientsToCombo();
-        loadBills();
-
-        patientBox.addActionListener(e -> refreshAdvanceLabel());
-        chkUseAdvance.addActionListener(e -> recalc());
-        txtTotal.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { recalc(); }
-            @Override public void removeUpdate(DocumentEvent e) { recalc(); }
-            @Override public void changedUpdate(DocumentEvent e) { recalc(); }
+        table.getSelectionModel().addListSelectionListener(e -> updateSelectionActions());
+        table.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && table.getSelectedRow() >= 0) {
+                    previewSelectedBill();
+                }
+            }
         });
 
-        btnClear.addActionListener(e -> clearForm());
-        btnRefresh.addActionListener(e -> loadBills());
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyFilter();
+            }
 
-        btnSave.addActionListener(e -> saveBill());
-        btnPreview.addActionListener(e -> previewSelectedBill());
-        btnPrint.addActionListener(e -> printSelectedBill());
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+        });
+        sorter.addRowSorterListener(e -> updateRecordCount());
+        return card;
     }
 
-    // -----------------------------
-    // Data Loading
-    // -----------------------------
-
     private void loadPatientsToCombo() {
+        PatientItem previous = (PatientItem) patientBox.getSelectedItem();
+        Integer previousId = previous == null ? null : previous.id;
+        patientNames.clear();
         patientBox.removeAllItems();
         List<Patient> patients = patientDAO.getAllPatients();
 
-        for (Patient p : patients) {
-            patientBox.addItem(new PatientItem(p.getPatientId(), p.getFullName()));
+        for (Patient patient : patients) {
+            patientNames.put(patient.getPatientId(), patient.getFullName());
+            patientBox.addItem(new PatientItem(patient.getPatientId(), patient.getFullName()));
         }
 
-        if (patientBox.getItemCount() > 0) {
+        if (previousId != null) {
+            for (int i = 0; i < patientBox.getItemCount(); i++) {
+                if (patientBox.getItemAt(i).id == previousId) {
+                    patientBox.setSelectedIndex(i);
+                    break;
+                }
+            }
+        }
+        if (patientBox.getSelectedIndex() < 0 && patientBox.getItemCount() > 0) {
             patientBox.setSelectedIndex(0);
         }
+        patientBox.setEnabled(patientBox.getItemCount() > 0);
         refreshAdvanceLabel();
-        recalc();
+        recalculate();
     }
 
     private void loadBills() {
+        patientNames.clear();
+        for (Patient patient : patientDAO.getAllPatients()) {
+            patientNames.put(patient.getPatientId(), patient.getFullName());
+        }
+
         model.setRowCount(0);
-        for (Bill b : billDAO.getAllBills()) {
+        for (Bill bill : billDAO.getAllBills()) {
+            String patientName = patientNames.getOrDefault(
+                    bill.getPatientId(), "Patient #" + bill.getPatientId()
+            );
             model.addRow(new Object[]{
-                    b.getBillId(),
-                    b.getPatientId(),
-                    b.getBillDate(),
-                    df.format(b.getTotalAmount()),
-                    df.format(b.getAdvanceUsed()),
-                    df.format(b.getPayableAmount()),
-                    b.getNotes()
+                    bill.getBillId(),
+                    patientName + "  ·  #" + bill.getPatientId(),
+                    bill.getBillDate(),
+                    bill.getTotalAmount(),
+                    bill.getAdvanceUsed(),
+                    bill.getPayableAmount(),
+                    bill.getNotes()
             });
         }
+        table.clearSelection();
+        updateSelectionActions();
+        updateRecordCount();
     }
 
     private void refreshAdvanceLabel() {
         PatientItem item = (PatientItem) patientBox.getSelectedItem();
         if (item == null) {
-            lblAdvance.setText("0.00");
-            return;
+            advanceBalanceValue.setText("0.00");
+        } else {
+            advanceBalanceValue.setText(
+                    amountFormat.format(patientDAO.getAdvanceByPatientId(item.id))
+            );
         }
-        double adv = patientDAO.getAdvanceByPatientId(item.id);
-        lblAdvance.setText(df.format(adv));
+        recalculate();
     }
 
-    // -----------------------------
-    // Calculations
-    // -----------------------------
-
-    private void recalc() {
-        double total = parseDoubleSafe(txtTotal.getText());
-        double advance = parseDoubleSafe(lblAdvance.getText());
-
-        double used = 0;
-        if (chkUseAdvance.isSelected()) {
-            used = Math.min(advance, total);
-        }
-        double payable = total - used;
-
-        lblAdvanceUsed.setText(df.format(used));
-        lblPayable.setText(df.format(payable));
+    private void recalculate() {
+        double total = parseAmount(totalField.getText());
+        double advance = parseAmount(advanceBalanceValue.getText());
+        double used = useAdvanceCheck.isSelected() ? Math.min(advance, total) : 0;
+        double payable = Math.max(0, total - used);
+        advanceUsedValue.setText(amountFormat.format(used));
+        payableValue.setText(amountFormat.format(payable));
     }
-
-    // -----------------------------
-    // Actions
-    // -----------------------------
 
     private void clearForm() {
-        txtTotal.setText("");
-        chkUseAdvance.setSelected(false);
-        txtNotes.setText("");
-        recalc();
+        totalField.setText("");
+        useAdvanceCheck.setSelected(false);
+        notesArea.setText("");
+        recalculate();
+        totalField.requestFocusInWindow();
     }
 
     private void saveBill() {
-        PatientItem item = (PatientItem) patientBox.getSelectedItem();
-        if (item == null) {
-            JOptionPane.showMessageDialog(this, "No patient selected!");
+        PatientItem patient = (PatientItem) patientBox.getSelectedItem();
+        if (patient == null) {
+            UITheme.showError(this, "Add or select a patient before creating a bill.");
             return;
         }
 
-        double total = parseDoubleSafe(txtTotal.getText());
-        if (total <= 0) {
-            JOptionPane.showMessageDialog(this, "Enter a valid total amount!");
+        double total = parseAmount(totalField.getText());
+        if (!Double.isFinite(total) || total <= 0) {
+            UITheme.showError(this, "Enter a total amount greater than zero.");
+            totalField.requestFocusInWindow();
             return;
         }
 
-        double advanceBalance = patientDAO.getAdvanceByPatientId(item.id);
-        double advanceUsed = 0;
-
-        if (chkUseAdvance.isSelected()) {
-            advanceUsed = Math.min(advanceBalance, total);
-        }
-
+        double advanceBalance = patientDAO.getAdvanceByPatientId(patient.id);
+        double advanceUsed = useAdvanceCheck.isSelected()
+                ? Math.min(advanceBalance, total)
+                : 0;
         double payable = total - advanceUsed;
 
         Bill bill = new Bill(
-                item.id,
+                patient.id,
                 total,
                 advanceUsed,
                 payable,
-                txtNotes.getText().trim()
+                notesArea.getText().trim()
         );
-
-        boolean success = billDAO.addBill(bill);
-
-        if (success) {
-            // reduce patient advance if used
-            if (advanceUsed > 0) {
-                double newAdvance = advanceBalance - advanceUsed;
-                patientDAO.updateAdvanceByPatientId(item.id, newAdvance);
-            }
-
-            JOptionPane.showMessageDialog(this, "Bill saved successfully!");
-            refreshAdvanceLabel();
-            recalc();
-            loadBills();
-            clearForm();
-        } else {
-            JOptionPane.showMessageDialog(this, "Failed to save bill!");
+        boolean saved = billDAO.addBillAndApplyAdvance(
+                bill,
+                advanceBalance - advanceUsed
+        );
+        if (!saved) {
+            UITheme.showError(this, "The bill could not be saved. Please try again.");
+            return;
         }
+
+        refreshAdvanceLabel();
+        loadBills();
+        clearForm();
+        UITheme.showSuccess(this, "Bill saved successfully.");
+    }
+
+    private void applyFilter() {
+        String text = searchField.getText().trim();
+        sorter.setRowFilter(text.isEmpty()
+                ? null
+                : RowFilter.regexFilter("(?i)" + Pattern.quote(text)));
+        updateRecordCount();
+    }
+
+    private void updateRecordCount() {
+        int visible = table == null ? 0 : table.getRowCount();
+        int total = model == null ? 0 : model.getRowCount();
+        if (visible == total) {
+            UITheme.setRecordCount(recordCount, total, "bill", "bills");
+        } else {
+            recordCount.setText(visible + " of " + total + " bills");
+        }
+        tableView.updateState(total, visible);
+    }
+
+    private void updateSelectionActions() {
+        boolean selected = table.getSelectedRow() >= 0;
+        previewButton.setEnabled(selected);
+        printButton.setEnabled(selected);
     }
 
     private void previewSelectedBill() {
         int viewRow = table.getSelectedRow();
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Select a bill first!");
+        if (viewRow < 0) {
             return;
         }
-
         int row = table.convertRowIndexToModel(viewRow);
+        JScrollPane previewScroll = UITheme.pageScroll(createBillPreviewPanel(row));
+        previewScroll.setPreferredSize(UITheme.dialogSize(630, 430));
+        JOptionPane.showMessageDialog(
+                this,
+                previewScroll,
+                "Bill preview",
+                JOptionPane.PLAIN_MESSAGE
+        );
+    }
 
-        String billId = model.getValueAt(row, 0).toString();
-        String patientId = model.getValueAt(row, 1).toString();
-        String date = model.getValueAt(row, 2).toString();
-        String total = model.getValueAt(row, 3).toString();
-        String advUsed = model.getValueAt(row, 4).toString();
-        String payable = model.getValueAt(row, 5).toString();
-        String notes = String.valueOf(model.getValueAt(row, 6));
+    private JComponent createBillPreviewPanel(int modelRow) {
+        String billId = String.valueOf(model.getValueAt(modelRow, 0));
+        String patient = String.valueOf(model.getValueAt(modelRow, 1));
+        String date = String.valueOf(model.getValueAt(modelRow, 2));
+        String total = formatModelAmount(model.getValueAt(modelRow, 3));
+        String advance = formatModelAmount(model.getValueAt(modelRow, 4));
+        String payable = formatModelAmount(model.getValueAt(modelRow, 5));
+        String notes = String.valueOf(model.getValueAt(modelRow, 6));
 
-        String text = buildBillText(billId, patientId, date, total, advUsed, payable, notes);
+        JPanel preview = new JPanel(new BorderLayout(0, 18));
+        preview.setBackground(UITheme.SURFACE);
+        preview.setBorder(new EmptyBorder(12, 14, 12, 14));
+        preview.setPreferredSize(new Dimension(610, 410));
 
-        JTextArea area = new JTextArea(text);
-        area.setFont(new Font("Consolas", Font.PLAIN, 13));
-        area.setEditable(false);
-        area.setLineWrap(true);
-        area.setWrapStyleWord(true);
+        JPanel header = new JPanel(new BorderLayout(18, 0));
+        header.setOpaque(false);
+        JPanel brand = new JPanel(new FlowLayout(FlowLayout.LEFT, 11, 0));
+        brand.setOpaque(false);
+        brand.add(new JLabel(new UITheme.BrandIcon(38)));
+        JPanel brandCopy = new JPanel();
+        brandCopy.setOpaque(false);
+        brandCopy.setLayout(new BoxLayout(brandCopy, BoxLayout.Y_AXIS));
+        JLabel brandName = new JLabel("MedicarePlus");
+        brandName.setFont(UITheme.font(Font.BOLD, 19));
+        brandName.setForeground(UITheme.NAVY);
+        brandCopy.add(brandName);
+        brandCopy.add(UITheme.mutedLabel("Patient billing statement"));
+        brand.add(brandCopy);
+        header.add(brand, BorderLayout.WEST);
 
-        JScrollPane sp = new JScrollPane(area);
-        sp.setPreferredSize(new Dimension(650, 420));
+        JPanel reference = new JPanel();
+        reference.setOpaque(false);
+        reference.setLayout(new BoxLayout(reference, BoxLayout.Y_AXIS));
+        JLabel billNumber = new JLabel("Bill #" + billId);
+        billNumber.setFont(UITheme.font(Font.BOLD, 14));
+        billNumber.setForeground(UITheme.NAVY);
+        billNumber.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        JLabel billDate = UITheme.mutedLabel(date);
+        billDate.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        reference.add(billNumber);
+        reference.add(Box.createVerticalStrut(3));
+        reference.add(billDate);
+        header.add(reference, BorderLayout.EAST);
+        preview.add(header, BorderLayout.NORTH);
 
-        JOptionPane.showMessageDialog(this, sp, "Bill Preview", JOptionPane.INFORMATION_MESSAGE);
+        JPanel body = new JPanel(new BorderLayout(0, 13));
+        body.setOpaque(false);
+        JPanel patientPanel = new JPanel(new BorderLayout());
+        patientPanel.setBackground(UITheme.SURFACE_ALT);
+        patientPanel.setBorder(new EmptyBorder(11, 13, 11, 13));
+        JLabel patientLabel = new JLabel("Billed to");
+        patientLabel.setFont(UITheme.font(Font.BOLD, 11));
+        patientLabel.setForeground(UITheme.TEXT_MUTED);
+        JLabel patientValue = new JLabel(patient);
+        patientValue.setFont(UITheme.font(Font.BOLD, 14));
+        patientValue.setForeground(UITheme.TEXT);
+        patientPanel.add(patientLabel, BorderLayout.WEST);
+        patientPanel.add(patientValue, BorderLayout.EAST);
+        body.add(patientPanel, BorderLayout.NORTH);
+
+        JPanel amounts = new JPanel();
+        amounts.setOpaque(false);
+        amounts.setLayout(new BoxLayout(amounts, BoxLayout.Y_AXIS));
+        amounts.add(statementRow("Total amount", total, false));
+        amounts.add(Box.createVerticalStrut(5));
+        amounts.add(statementRow("Advance applied", advance, false));
+        amounts.add(Box.createVerticalStrut(8));
+        amounts.add(statementRow("Amount payable", payable, true));
+        body.add(amounts, BorderLayout.CENTER);
+
+        JPanel notesPanel = new JPanel(new BorderLayout(0, 5));
+        notesPanel.setOpaque(false);
+        JLabel notesLabel = new JLabel("Notes");
+        notesLabel.setFont(UITheme.font(Font.BOLD, 11));
+        notesLabel.setForeground(UITheme.TEXT_MUTED);
+        JTextArea notesValue = new JTextArea(
+                notes == null || notes.equals("null") || notes.isBlank() ? "—" : notes
+        );
+        notesValue.setEditable(false);
+        notesValue.setFocusable(true);
+        notesValue.setRows(2);
+        UITheme.styleTextArea(notesValue);
+        notesValue.setBackground(UITheme.SURFACE_ALT);
+        notesPanel.add(notesLabel, BorderLayout.NORTH);
+        notesPanel.add(notesValue, BorderLayout.CENTER);
+        body.add(notesPanel, BorderLayout.SOUTH);
+        preview.add(body, BorderLayout.CENTER);
+
+        JLabel footer = UITheme.mutedLabel(
+                "Thank you for choosing MedicarePlus for your care."
+        );
+        footer.setHorizontalAlignment(SwingConstants.CENTER);
+        preview.add(footer, BorderLayout.SOUTH);
+        return preview;
+    }
+
+    private JComponent statementRow(String label, String value, boolean emphasized) {
+        JPanel row = new JPanel(new BorderLayout(12, 0));
+        row.setBackground(emphasized ? UITheme.PRIMARY_SOFT : UITheme.SURFACE);
+        row.setBorder(new EmptyBorder(
+                emphasized ? 12 : 8,
+                emphasized ? 13 : 4,
+                emphasized ? 12 : 8,
+                emphasized ? 13 : 4
+        ));
+
+        JLabel name = new JLabel(label);
+        name.setFont(UITheme.font(emphasized ? Font.BOLD : Font.PLAIN, 13));
+        name.setForeground(emphasized ? UITheme.PRIMARY_DARK : UITheme.TEXT_MUTED);
+        JLabel amount = new JLabel(value);
+        amount.setFont(UITheme.font(Font.BOLD, emphasized ? 20 : 14));
+        amount.setForeground(emphasized ? UITheme.PRIMARY_DARK : UITheme.TEXT);
+        row.add(name, BorderLayout.WEST);
+        row.add(amount, BorderLayout.EAST);
+        return row;
     }
 
     private void printSelectedBill() {
         int viewRow = table.getSelectedRow();
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Select a bill first!");
+        if (viewRow < 0) {
             return;
         }
-
         int row = table.convertRowIndexToModel(viewRow);
-
-        String billId = model.getValueAt(row, 0).toString();
-        String patientId = model.getValueAt(row, 1).toString();
-        String date = model.getValueAt(row, 2).toString();
-        String total = model.getValueAt(row, 3).toString();
-        String advUsed = model.getValueAt(row, 4).toString();
-        String payable = model.getValueAt(row, 5).toString();
-        String notes = String.valueOf(model.getValueAt(row, 6));
-
-        String text = buildBillText(billId, patientId, date, total, advUsed, payable, notes);
-
-        JTextArea area = new JTextArea(text);
-        area.setFont(new Font("Consolas", Font.PLAIN, 12));
+        JTextArea area = new JTextArea(buildBillText(row));
+        area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         area.setEditable(false);
-
         try {
-            boolean ok = area.print(); // shows print dialog
-            if (!ok) {
-                JOptionPane.showMessageDialog(this, "Print cancelled.");
+            if (!area.print()) {
+                UITheme.showInfo(this, "Print cancelled", "No bill was printed.");
             }
-        } catch (PrinterException e) {
-            e.printStackTrace();
-            JOptionPane.showMessageDialog(this, "Print failed: " + e.getMessage());
+        } catch (PrinterException exception) {
+            UITheme.showError(this, "Printing failed: " + exception.getMessage());
         }
     }
 
-    private String buildBillText(String billId, String patientId, String date,
-                                 String total, String advUsed, String payable, String notes) {
+    private String buildBillText(int modelRow) {
+        String billId = model.getValueAt(modelRow, 0).toString();
+        String patient = model.getValueAt(modelRow, 1).toString();
+        String date = model.getValueAt(modelRow, 2).toString();
+        String total = formatModelAmount(model.getValueAt(modelRow, 3));
+        String advance = formatModelAmount(model.getValueAt(modelRow, 4));
+        String payable = formatModelAmount(model.getValueAt(modelRow, 5));
+        String notes = String.valueOf(model.getValueAt(modelRow, 6));
 
-        return "==============================\n" +
-                "        MEDICARE PLUS\n" +
-                "           BILL\n" +
-                "==============================\n" +
-                "Bill ID      : " + billId + "\n" +
-                "Patient ID   : " + patientId + "\n" +
-                "Bill Date    : " + date + "\n" +
-                "------------------------------\n" +
-                "Total Amount : " + total + "\n" +
-                "Advance Used : " + advUsed + "\n" +
-                "Payable      : " + payable + "\n" +
-                "------------------------------\n" +
-                "Notes:\n" + (notes == null ? "" : notes) + "\n" +
-                "==============================\n" +
-                "Thank you!\n";
+        return """
+                MEDICAREPLUS
+                Patient billing statement
+                ==================================================
+                Bill number       %s
+                Patient           %s
+                Statement date    %s
+                --------------------------------------------------
+                Total amount      %s
+                Advance applied   %s
+                AMOUNT PAYABLE    %s
+                --------------------------------------------------
+                Notes
+                %s
+                ==================================================
+                Thank you for choosing MedicarePlus.
+                """.formatted(
+                billId,
+                patient,
+                date,
+                total,
+                advance,
+                payable,
+                notes == null || notes.equals("null") || notes.isBlank() ? "—" : notes
+        );
     }
 
-    private double parseDoubleSafe(String value) {
+    private void wireShortcuts() {
+        int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask),
+                "focusSearch",
+                () -> searchField.requestFocusInWindow()
+        );
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_R, menuMask),
+                "refreshBills",
+                this::loadBills
+        );
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_S, menuMask),
+                "saveBill",
+                this::saveBill
+        );
+    }
+
+    private double parseAmount(String value) {
         try {
-            if (value == null) return 0;
-            String v = value.trim();
-            if (v.isEmpty()) return 0;
-            return Double.parseDouble(v);
-        } catch (Exception e) {
+            if (value == null || value.isBlank()) {
+                return 0;
+            }
+            double parsed = Double.parseDouble(value.replace(",", "").trim());
+            return Double.isFinite(parsed) ? parsed : 0;
+        } catch (NumberFormatException ignored) {
             return 0;
         }
     }
 
-    // -----------------------------
-    // Helper classes
-    // -----------------------------
+    private String formatModelAmount(Object value) {
+        return value instanceof Number number
+                ? amountFormat.format(number.doubleValue())
+                : String.valueOf(value);
+    }
 
-    static class PatientItem {
-        int id;
-        String name;
+    private static final class ResponsiveWorkspace extends JPanel implements Scrollable {
+        private ResponsiveWorkspace() {
+            super(new GridBagLayout());
+        }
 
-        PatientItem(int id, String name) {
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect,
+                                              int orientation, int direction) {
+            return 18;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect,
+                                               int orientation, int direction) {
+            return Math.max(18, visibleRect.height - 36);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
+    private static final class PatientItem {
+        private final int id;
+        private final String name;
+
+        private PatientItem(int id, String name) {
             this.id = id;
             this.name = name;
         }
 
         @Override
         public String toString() {
-            return id + " - " + name;
+            return name + "  ·  #" + id;
         }
     }
 
-    // -----------------------------
-    // UI Helpers (same style)
-    // -----------------------------
+    private final class MoneyRenderer extends UITheme.TableCellRenderer {
+        private MoneyRenderer() {
+            setHorizontalAlignment(SwingConstants.RIGHT);
+        }
 
-    static class GradientPanel extends JPanel {
         @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-
-            GradientPaint gp = new GradientPaint(
-                    0, 0, new Color(245, 246, 250),
-                    0, getHeight(), new Color(235, 238, 245)
+        public Component getTableCellRendererComponent(
+                JTable table,
+                Object value,
+                boolean isSelected,
+                boolean hasFocus,
+                int row,
+                int column
+        ) {
+            Component component = super.getTableCellRendererComponent(
+                    table, value, isSelected, hasFocus, row, column
             );
-            g2.setPaint(gp);
-            g2.fillRect(0, 0, getWidth(), getHeight());
-            g2.dispose();
-        }
-    }
-
-    static class RoundedPanel extends JPanel {
-        private final int radius;
-
-        public RoundedPanel(int radius) {
-            this.radius = radius;
-            setOpaque(false);
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(getBackground());
-            g2.fillRoundRect(0, 0, getWidth(), getHeight(), radius, radius);
-            g2.dispose();
-            super.paintComponent(g);
-        }
-    }
-
-    static class ModernButton extends JButton {
-        private final Color base = new Color(32, 84, 240);
-        private final Color hover = new Color(22, 68, 215);
-        private final Color pressed = new Color(18, 55, 175);
-
-        public ModernButton(String text) {
-            super(text);
-
-            setFont(new Font("Segoe UI", Font.BOLD, 13));
-            setForeground(Color.WHITE);
-            setFocusPainted(false);
-            setBorderPainted(false);
-            setContentAreaFilled(false);
-            setOpaque(false);
-            setCursor(new Cursor(Cursor.HAND_CURSOR));
-            setPreferredSize(new Dimension(160, 38));
-
-            addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { repaint(); }
-                @Override public void mouseExited(MouseEvent e) { repaint(); }
-                @Override public void mousePressed(MouseEvent e) { repaint(); }
-                @Override public void mouseReleased(MouseEvent e) { repaint(); }
-            });
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            boolean isHover = getModel().isRollover();
-            boolean isPressed = getModel().isArmed();
-
-            Color c = isPressed ? pressed : (isHover ? hover : base);
-
-            g2.setColor(new Color(0, 0, 0, 25));
-            g2.fillRoundRect(3, 4, getWidth() - 6, getHeight() - 6, 14, 14);
-
-            g2.setColor(c);
-            g2.fillRoundRect(0, 0, getWidth() - 6, getHeight() - 6, 14, 14);
-
-            g2.dispose();
-            super.paintComponent(g);
+            if (value instanceof Number number) {
+                setText(amountFormat.format(number.doubleValue()));
+            }
+            return component;
         }
     }
 }

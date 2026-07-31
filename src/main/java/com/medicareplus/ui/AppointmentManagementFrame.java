@@ -2,411 +2,443 @@ package com.medicareplus.ui;
 
 import com.medicareplus.dao.AppointmentDAO;
 import com.medicareplus.dao.DoctorDAO;
-import com.medicareplus.dao.PatientDAO;
 import com.medicareplus.dao.NotificationDAO;
+import com.medicareplus.dao.PatientDAO;
 import com.medicareplus.model.Appointment;
 import com.medicareplus.model.Doctor;
-import com.medicareplus.model.Patient;
 import com.medicareplus.model.Notification;
+import com.medicareplus.model.Patient;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
-import javax.swing.table.JTableHeader;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
 
 public class AppointmentManagementFrame extends JFrame {
 
-    private JTable table;
-    private DefaultTableModel model;
+    private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final AppointmentDAO appointmentDAO = new AppointmentDAO();
     private final PatientDAO patientDAO = new PatientDAO();
     private final DoctorDAO doctorDAO = new DoctorDAO();
     private final NotificationDAO notificationDAO = new NotificationDAO();
 
-    private JTextField txtSearch;
+    private final Map<Integer, String> patientNames = new HashMap<>();
+    private final Map<Integer, String> doctorNames = new HashMap<>();
+
+    private JTable table;
+    private DefaultTableModel model;
+    private UITheme.SearchField searchField;
     private TableRowSorter<DefaultTableModel> sorter;
+    private JLabel recordCountLabel;
+    private UITheme.Button statusButton;
+    private UITheme.Button deleteButton;
+    private UITheme.TableView tableView;
 
     public AppointmentManagementFrame() {
+        UITheme.configureFrame(this, "Appointments", 1180, 720);
 
-        setTitle("MediCare Plus - Appointments");
-        setSize(1150, 680);
-        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        setLocationRelativeTo(null);
+        UITheme.BackgroundPanel root = new UITheme.BackgroundPanel();
+        root.setLayout(new BorderLayout(0, 20));
+        root.setBorder(new EmptyBorder(24, 24, 24, 24));
 
-        // Root background (soft gradient like dashboard)
-        JPanel root = new GradientPanel();
-        root.setLayout(new BorderLayout(18, 18));
-        root.setBorder(new EmptyBorder(22, 22, 22, 22));
+        searchField = UITheme.searchField("Search appointments");
+        root.add(UITheme.createHeader(
+                "Appointments",
+                "Schedule visits, coordinate clinicians, and track every status.",
+                searchField
+        ), BorderLayout.NORTH);
 
-        // ---------- Header ----------
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        UITheme.CardPanel card = new UITheme.CardPanel();
+        card.setLayout(new BorderLayout(0, 14));
 
-        JLabel title = new JLabel("Appointment Management");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 28));
-        title.setForeground(new Color(25, 25, 25));
+        UITheme.Button addButton = UITheme.button(
+                "Schedule appointment", UITheme.IconType.ADD, UITheme.ButtonStyle.PRIMARY);
+        statusButton = UITheme.button(
+                "Update status", UITheme.IconType.EDIT, UITheme.ButtonStyle.SECONDARY);
+        deleteButton = UITheme.button(
+                "Delete", UITheme.IconType.DELETE, UITheme.ButtonStyle.DANGER);
+        UITheme.Button refreshButton = UITheme.button(
+                "Refresh", UITheme.IconType.REFRESH, UITheme.ButtonStyle.GHOST);
 
-        JLabel subtitle = new JLabel("Schedule appointments, update status, and manage records");
-        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        subtitle.setForeground(new Color(80, 80, 80));
+        statusButton.setEnabled(false);
+        deleteButton.setEnabled(false);
+        addButton.setToolTipText("Schedule a new patient appointment");
+        statusButton.setToolTipText("Select an appointment to update its status");
+        deleteButton.setToolTipText("Select an appointment to delete it");
+        refreshButton.setToolTipText("Reload appointments (Ctrl/Cmd+R)");
 
-        JPanel titleBox = new JPanel();
-        titleBox.setOpaque(false);
-        titleBox.setLayout(new BoxLayout(titleBox, BoxLayout.Y_AXIS));
-        titleBox.add(title);
-        titleBox.add(Box.createVerticalStrut(4));
-        titleBox.add(subtitle);
-
-        header.add(titleBox, BorderLayout.WEST);
-
-        // Search box (right)
-        JPanel searchBox = new JPanel(new BorderLayout(8, 8));
-        searchBox.setOpaque(false);
-
-        JLabel searchLbl = new JLabel("Search:");
-        searchLbl.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-
-        txtSearch = new JTextField();
-        txtSearch.setPreferredSize(new Dimension(300, 36));
-        txtSearch.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        txtSearch.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(210, 214, 222)),
-                new EmptyBorder(6, 10, 6, 10)
-        ));
-
-        searchBox.add(searchLbl, BorderLayout.WEST);
-        searchBox.add(txtSearch, BorderLayout.CENTER);
-
-        header.add(searchBox, BorderLayout.EAST);
-
-        root.add(header, BorderLayout.NORTH);
-
-        // ---------- Center glass card ----------
-        RoundedPanel card = new RoundedPanel(22);
-        card.setLayout(new BorderLayout(14, 14));
-        card.setBackground(new Color(255, 255, 255, 210));
-        card.setBorder(new EmptyBorder(14, 14, 14, 14));
-
-        // Buttons row
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actions.setOpaque(false);
+        actions.add(addButton);
+        actions.add(statusButton);
+        actions.add(deleteButton);
+        actions.add(refreshButton);
 
-        ModernButton btnAdd = new ModernButton("Schedule Appointment");
-        ModernButton btnStatus = new ModernButton("Update Status");
-        ModernButton btnDelete = new ModernButton("Delete Appointment");
-        ModernButton btnRefresh = new ModernButton("Refresh");
+        recordCountLabel = UITheme.recordCountLabel();
+        JPanel toolbar = new JPanel(new BorderLayout(16, 0));
+        toolbar.setOpaque(false);
+        toolbar.add(actions, BorderLayout.WEST);
+        toolbar.add(recordCountLabel, BorderLayout.EAST);
+        card.add(toolbar, BorderLayout.NORTH);
 
-        actions.add(btnAdd);
-        actions.add(btnStatus);
-        actions.add(btnDelete);
-        actions.add(btnRefresh);
-
-        card.add(actions, BorderLayout.NORTH);
-
-        // Table model (non-editable)
         model = new DefaultTableModel(
-                new Object[]{"ID", "Patient ID", "Doctor ID", "Date", "Time", "Status", "Notes"},
-                0
-        ) {
-            @Override public boolean isCellEditable(int row, int column) {
+                new Object[]{"ID", "Patient", "Doctor", "Date", "Time", "Status", "Notes"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
                 return false;
+            }
+
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                return columnIndex == 0 ? Integer.class : String.class;
             }
         };
 
         table = new JTable(model);
-        table.setRowHeight(30);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        table.setSelectionBackground(new Color(220, 232, 255));
-        table.setSelectionForeground(new Color(20, 20, 20));
-        table.setGridColor(new Color(230, 233, 240));
-        table.setShowVerticalLines(false);
+        UITheme.styleTable(table);
+        UITheme.setColumnWidths(table, 58, 170, 190, 105, 80, 105, 260);
+        table.getColumnModel().getColumn(5).setCellRenderer(new UITheme.StatusBadgeRenderer());
+        table.setAutoCreateRowSorter(false);
+        tableView = new UITheme.TableView(
+                table,
+                UITheme.IconType.APPOINTMENTS,
+                "No appointments yet",
+                "Schedule an appointment to start the care calendar."
+        );
+        card.add(tableView, BorderLayout.CENTER);
 
-        JTableHeader th = table.getTableHeader();
-        th.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        th.setBackground(new Color(245, 246, 250));
-        th.setForeground(new Color(40, 40, 40));
-
-        JScrollPane sp = new JScrollPane(table);
-        sp.setBorder(BorderFactory.createLineBorder(new Color(230, 233, 240)));
-        card.add(sp, BorderLayout.CENTER);
+        sorter = new TableRowSorter<>(model);
+        table.setRowSorter(sorter);
 
         root.add(card, BorderLayout.CENTER);
         setContentPane(root);
 
-        // Search filter
-        sorter = new TableRowSorter<>(model);
-        table.setRowSorter(sorter);
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyFilter();
+            }
 
-        txtSearch.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { applyFilter(); }
-            @Override public void removeUpdate(DocumentEvent e) { applyFilter(); }
-            @Override public void changedUpdate(DocumentEvent e) { applyFilter(); }
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+        });
+        sorter.addRowSorterListener(e -> updateRecordCount());
+        table.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateSelectionActions();
+            }
+        });
+        table.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)
+                        && table.getSelectedRow() >= 0) {
+                    updateStatus();
+                }
+            }
         });
 
-        // Actions
-        btnAdd.addActionListener(e -> addAppointment());
-        btnStatus.addActionListener(e -> updateStatus());
-        btnDelete.addActionListener(e -> deleteAppointment());
-        btnRefresh.addActionListener(e -> loadAppointments());
+        addButton.addActionListener(e -> addAppointment());
+        statusButton.addActionListener(e -> updateStatus());
+        deleteButton.addActionListener(e -> deleteAppointment());
+        refreshButton.addActionListener(e -> loadAppointments());
+
+        int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        UITheme.bindShortcut(getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask),
+                "focusAppointmentSearch", () -> {
+                    searchField.requestFocusInWindow();
+                    searchField.selectAll();
+                });
+        UITheme.bindShortcut(getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_R, menuMask),
+                "refreshAppointments", this::loadAppointments);
 
         loadAppointments();
     }
 
     private void applyFilter() {
-        String text = txtSearch.getText().trim();
-        if (text.isEmpty()) {
-            sorter.setRowFilter(null);
-        } else {
-            sorter.setRowFilter(RowFilter.regexFilter("(?i)" + text));
-        }
+        String text = searchField.getText().trim();
+        sorter.setRowFilter(text.isEmpty()
+                ? null
+                : RowFilter.regexFilter("(?i)" + Pattern.quote(text)));
+        updateRecordCount();
     }
 
     private void loadAppointments() {
-        model.setRowCount(0);
+        patientNames.clear();
+        doctorNames.clear();
+        for (Patient patient : patientDAO.getAllPatients()) {
+            patientNames.put(patient.getPatientId(), patient.getFullName());
+        }
+        for (Doctor doctor : doctorDAO.getAllDoctors()) {
+            doctorNames.put(doctor.getDoctorId(), doctor.getFullName());
+        }
 
-        for (Appointment a : appointmentDAO.getAllAppointments()) {
+        model.setRowCount(0);
+        for (Appointment appointment : appointmentDAO.getAllAppointments()) {
             model.addRow(new Object[]{
-                    a.getAppointmentId(),
-                    a.getPatientId(),
-                    a.getDoctorId(),
-                    a.getAppointmentDate(),
-                    a.getAppointmentTime(),
-                    a.getStatus(),
-                    a.getNotes()
+                    appointment.getAppointmentId(),
+                    displayName(patientNames, appointment.getPatientId(), "Patient"),
+                    displayName(doctorNames, appointment.getDoctorId(), "Doctor"),
+                    appointment.getAppointmentDate(),
+                    appointment.getAppointmentTime(),
+                    appointment.getStatus(),
+                    appointment.getNotes()
             });
         }
+
+        table.clearSelection();
+        updateSelectionActions();
+        updateRecordCount();
+    }
+
+    private String displayName(Map<Integer, String> names, int id, String fallback) {
+        String name = names.get(id);
+        return name == null || name.isBlank()
+                ? fallback + " #" + id
+                : name + "  ·  #" + id;
+    }
+
+    private void updateRecordCount() {
+        int total = model.getRowCount();
+        int visible = table.getRowCount();
+        if (visible == total) {
+            UITheme.setRecordCount(recordCountLabel, total, "appointment", "appointments");
+        } else {
+            recordCountLabel.setText(visible + " shown  ·  " + total + " total");
+        }
+        tableView.updateState(total, visible);
+    }
+
+    private void updateSelectionActions() {
+        boolean selected = table.getSelectedRow() >= 0;
+        statusButton.setEnabled(selected);
+        deleteButton.setEnabled(selected);
     }
 
     private void addAppointment() {
+        List<Patient> patients = patientDAO.getAllPatients();
+        List<Doctor> doctors = doctorDAO.getAllDoctors();
 
-        JComboBox<Integer> patientBox = new JComboBox<>();
-        JComboBox<Integer> doctorBox = new JComboBox<>();
-
-        for (Patient p : patientDAO.getAllPatients()) {
-            patientBox.addItem(p.getPatientId());
+        if (patients.isEmpty()) {
+            UITheme.showError(this,
+                    "Add at least one patient before scheduling an appointment.");
+            return;
         }
-        for (Doctor d : doctorDAO.getAllDoctors()) {
-            doctorBox.addItem(d.getDoctorId());
+        if (doctors.isEmpty()) {
+            UITheme.showError(this,
+                    "Add at least one doctor before scheduling an appointment.");
+            return;
         }
 
-        JTextField date = new JTextField("2025-12-12");
-        JTextField time = new JTextField("10:30");
-        JTextField notes = new JTextField();
+        JComboBox<Patient> patientBox = new JComboBox<>(patients.toArray(new Patient[0]));
+        JComboBox<Doctor> doctorBox = new JComboBox<>(doctors.toArray(new Doctor[0]));
+        patientBox.setRenderer(personRenderer(true));
+        doctorBox.setRenderer(personRenderer(false));
 
-        Object[] message = {
-                "Patient ID:", patientBox,
-                "Doctor ID:", doctorBox,
-                "Date (YYYY-MM-DD):", date,
-                "Time (HH:MM):", time,
-                "Notes:", notes
-        };
+        JTextField dateField = UITheme.textField();
+        dateField.setText(LocalDate.now().toString());
+        JTextField timeField = UITheme.textField();
+        timeField.setText(LocalTime.now().truncatedTo(ChronoUnit.MINUTES).format(TIME_FORMAT));
+        JTextField notesField = UITheme.textField();
 
-        int option = JOptionPane.showConfirmDialog(
-                this,
-                message,
-                "Schedule Appointment",
-                JOptionPane.OK_CANCEL_OPTION
+        UITheme.FormBuilder form = new UITheme.FormBuilder()
+                .addField("Patient", patientBox)
+                .addField("Doctor", doctorBox)
+                .addField("Date", dateField, "Use YYYY-MM-DD")
+                .addField("Time", timeField, "Use 24-hour HH:mm")
+                .addField("Notes", notesField, "Optional context for the care team");
+        JScrollPane formScroll = UITheme.pageScroll(form);
+        formScroll.setPreferredSize(UITheme.dialogSize(520, 360));
+
+        Patient patient;
+        Doctor doctor;
+        String dateText;
+        String timeText;
+        while (true) {
+            int option = JOptionPane.showConfirmDialog(
+                    this,
+                    formScroll,
+                    "Schedule appointment",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE
+            );
+            if (option != JOptionPane.OK_OPTION) {
+                return;
+            }
+
+            patient = (Patient) patientBox.getSelectedItem();
+            doctor = (Doctor) doctorBox.getSelectedItem();
+            dateText = dateField.getText().trim();
+            timeText = timeField.getText().trim();
+
+            if (patient == null || doctor == null) {
+                UITheme.showError(this, "Choose both a patient and a doctor.");
+                continue;
+            }
+            if (!isValidDate(dateText)) {
+                UITheme.showError(this, "Enter a valid date in YYYY-MM-DD format.");
+                dateField.requestFocusInWindow();
+                dateField.selectAll();
+                continue;
+            }
+            if (!isValidTime(timeText)) {
+                UITheme.showError(this, "Enter a valid time in 24-hour HH:mm format.");
+                timeField.requestFocusInWindow();
+                timeField.selectAll();
+                continue;
+            }
+            break;
+        }
+
+        Appointment appointment = new Appointment(
+                patient.getPatientId(),
+                doctor.getDoctorId(),
+                dateText,
+                timeText,
+                "Scheduled",
+                notesField.getText().trim()
         );
 
-        if (option == JOptionPane.OK_OPTION) {
+        if (!appointmentDAO.addAppointment(appointment)) {
+            UITheme.showError(this, "The appointment could not be scheduled.");
+            return;
+        }
 
-            Appointment a = new Appointment(
-                    (int) patientBox.getSelectedItem(),
-                    (int) doctorBox.getSelectedItem(),
-                    date.getText().trim(),
-                    time.getText().trim(),
-                    "Scheduled",
-                    notes.getText().trim()
-            );
+        notificationDAO.addNotification(new Notification(
+                "Patient",
+                appointment.getPatientId(),
+                "Your appointment is scheduled on " + appointment.getAppointmentDate()
+                        + " at " + appointment.getAppointmentTime()
+                        + " with Dr. " + doctor.getFullName() + "."
+        ));
+        notificationDAO.addNotification(new Notification(
+                "Doctor",
+                appointment.getDoctorId(),
+                "New appointment scheduled on " + appointment.getAppointmentDate()
+                        + " at " + appointment.getAppointmentTime()
+                        + " for " + patient.getFullName() + "."
+        ));
 
-            boolean success = appointmentDAO.addAppointment(a);
+        UITheme.showSuccess(this, "Appointment scheduled successfully.");
+        loadAppointments();
+    }
 
-            JOptionPane.showMessageDialog(
-                    this,
-                    success ? "Appointment scheduled!" : "Failed to schedule appointment!"
-            );
-
-            if (success) {
-
-                // 🔔 Notify Patient
-                notificationDAO.addNotification(
-                        new Notification(
-                                "Patient",
-                                a.getPatientId(),
-                                "Your appointment is scheduled on " +
-                                        a.getAppointmentDate() + " at " +
-                                        a.getAppointmentTime() +
-                                        " (Doctor ID: " + a.getDoctorId() + ")"
-                        )
-                );
-
-                // 🔔 Notify Doctor
-                notificationDAO.addNotification(
-                        new Notification(
-                                "Doctor",
-                                a.getDoctorId(),
-                                "New appointment scheduled on " +
-                                        a.getAppointmentDate() + " at " +
-                                        a.getAppointmentTime() +
-                                        " (Patient ID: " + a.getPatientId() + ")"
-                        )
-                );
-
-                loadAppointments();
+    private ListCellRenderer<Object> personRenderer(boolean patientRenderer) {
+        return new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(
+                    JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                JLabel label = (JLabel) super.getListCellRendererComponent(
+                        list, value, index, isSelected, cellHasFocus);
+                if (patientRenderer && value instanceof Patient patient) {
+                    label.setText(patient.getFullName() + "  ·  Patient #" + patient.getPatientId());
+                } else if (!patientRenderer && value instanceof Doctor doctor) {
+                    label.setText(doctor.getFullName() + "  ·  " + doctor.getSpecialty()
+                            + "  ·  #" + doctor.getDoctorId());
+                }
+                label.setBorder(new EmptyBorder(7, 9, 7, 9));
+                return label;
             }
+        };
+    }
+
+    private boolean isValidDate(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        try {
+            LocalDate.parse(value);
+            return true;
+        } catch (DateTimeParseException ex) {
+            return false;
+        }
+    }
+
+    private boolean isValidTime(String value) {
+        if (!value.matches("\\d{2}:\\d{2}")) {
+            return false;
+        }
+        try {
+            LocalTime.parse(value, DateTimeFormatter.ISO_LOCAL_TIME);
+            return true;
+        } catch (DateTimeParseException ex) {
+            return false;
         }
     }
 
     private void updateStatus() {
-
         int viewRow = table.getSelectedRow();
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Select an appointment first!");
+        if (viewRow < 0) {
             return;
         }
 
         int row = table.convertRowIndexToModel(viewRow);
-        int id = Integer.parseInt(model.getValueAt(row, 0).toString());
-
+        int id = ((Number) model.getValueAt(row, 0)).intValue();
+        String currentStatus = String.valueOf(model.getValueAt(row, 5));
         String[] statuses = {"Scheduled", "Completed", "Canceled", "Delayed"};
         String status = (String) JOptionPane.showInputDialog(
                 this,
-                "Select Status:",
-                "Update Status",
+                "Choose the new appointment status.",
+                "Update appointment status",
                 JOptionPane.PLAIN_MESSAGE,
                 null,
                 statuses,
-                statuses[0]
+                currentStatus
         );
+        if (status == null || status.equals(currentStatus)) {
+            return;
+        }
 
-        if (status != null) {
-            boolean success = appointmentDAO.updateStatus(id, status);
-
-            JOptionPane.showMessageDialog(
-                    this,
-                    success ? "Status updated!" : "Failed to update status!"
-            );
-
-            if (success) loadAppointments();
+        if (appointmentDAO.updateStatus(id, status)) {
+            UITheme.showSuccess(this, "Appointment status updated.");
+            loadAppointments();
+        } else {
+            UITheme.showError(this, "The appointment status could not be updated.");
         }
     }
 
     private void deleteAppointment() {
-
         int viewRow = table.getSelectedRow();
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Select an appointment first!");
+        if (viewRow < 0) {
             return;
         }
 
         int row = table.convertRowIndexToModel(viewRow);
-        int id = Integer.parseInt(model.getValueAt(row, 0).toString());
-
-        int confirm = JOptionPane.showConfirmDialog(
-                this,
-                "Delete this appointment?",
-                "Confirm",
-                JOptionPane.YES_NO_OPTION
-        );
-
-        if (confirm == JOptionPane.YES_OPTION) {
-            boolean success = appointmentDAO.deleteAppointment(id);
-
-            JOptionPane.showMessageDialog(
-                    this,
-                    success ? "Appointment deleted!" : "Failed to delete appointment!"
-            );
-
-            if (success) loadAppointments();
-        }
-    }
-
-    // ---------- UI Helpers ----------
-
-    static class GradientPanel extends JPanel {
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-
-            GradientPaint gp = new GradientPaint(0, 0, new Color(245, 246, 250),
-                    0, getHeight(), new Color(235, 238, 245));
-            g2.setPaint(gp);
-            g2.fillRect(0, 0, getWidth(), getHeight());
-            g2.dispose();
-        }
-    }
-
-    static class RoundedPanel extends JPanel {
-        private final int radius;
-
-        public RoundedPanel(int radius) {
-            this.radius = radius;
-            setOpaque(false);
+        int id = ((Number) model.getValueAt(row, 0)).intValue();
+        if (!UITheme.confirmDelete(this, "appointment #" + id)) {
+            return;
         }
 
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(getBackground());
-            g2.fillRoundRect(0, 0, getWidth(), getHeight(), radius, radius);
-            g2.dispose();
-            super.paintComponent(g);
-        }
-    }
-
-    static class ModernButton extends JButton {
-        private final Color base = new Color(32, 84, 240);
-        private final Color hover = new Color(22, 68, 215);
-        private final Color pressed = new Color(18, 55, 175);
-
-        public ModernButton(String text) {
-            super(text);
-
-            setFont(new Font("Segoe UI", Font.BOLD, 13));
-            setForeground(Color.WHITE);
-            setFocusPainted(false);
-            setBorderPainted(false);
-            setContentAreaFilled(false);
-            setOpaque(false);
-            setCursor(new Cursor(Cursor.HAND_CURSOR));
-            setPreferredSize(new Dimension(170, 38));
-
-            addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { repaint(); }
-                @Override public void mouseExited(MouseEvent e) { repaint(); }
-                @Override public void mousePressed(MouseEvent e) { repaint(); }
-                @Override public void mouseReleased(MouseEvent e) { repaint(); }
-            });
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            boolean isHover = getModel().isRollover();
-            boolean isPressed = getModel().isArmed();
-
-            Color c = isPressed ? pressed : (isHover ? hover : base);
-
-            g2.setColor(new Color(0, 0, 0, 25));
-            g2.fillRoundRect(3, 4, getWidth() - 6, getHeight() - 6, 14, 14);
-
-            g2.setColor(c);
-            g2.fillRoundRect(0, 0, getWidth() - 6, getHeight() - 6, 14, 14);
-
-            g2.dispose();
-            super.paintComponent(g);
+        if (appointmentDAO.deleteAppointment(id)) {
+            UITheme.showSuccess(this, "Appointment deleted.");
+            loadAppointments();
+        } else {
+            UITheme.showError(this, "The appointment could not be deleted.");
         }
     }
 }

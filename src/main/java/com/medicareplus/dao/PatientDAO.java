@@ -11,9 +11,12 @@ public class PatientDAO {
 
     // 1) Add Patient
     public boolean addPatient(Patient patient) {
+        return addPatient(patient, 0);
+    }
 
-        String sql = "INSERT INTO patients(full_name, nic, phone, email, address, medical_history) " +
-                "VALUES(?, ?, ?, ?, ?, ?)";
+    public boolean addPatient(Patient patient, double advance) {
+        String sql = "INSERT INTO patients(full_name, nic, phone, email, address, medical_history, advance_paid) " +
+                "VALUES(?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection conn = DBConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -24,6 +27,7 @@ public class PatientDAO {
             ps.setString(4, patient.getEmail());
             ps.setString(5, patient.getAddress());
             ps.setString(6, patient.getMedicalHistory());
+            ps.setDouble(7, advance);
 
             return ps.executeUpdate() > 0;
 
@@ -79,6 +83,31 @@ public class PatientDAO {
             ps.setString(5, patient.getAddress());
             ps.setString(6, patient.getMedicalHistory());
             ps.setInt(7, patient.getPatientId());
+
+            return ps.executeUpdate() > 0;
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean updatePatient(Patient patient, double advance) {
+
+        String sql = "UPDATE patients SET full_name=?, nic=?, phone=?, email=?, address=?, medical_history=?, " +
+                "advance_paid=? WHERE patient_id=?";
+
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, patient.getFullName());
+            ps.setString(2, patient.getNic());
+            ps.setString(3, patient.getPhone());
+            ps.setString(4, patient.getEmail());
+            ps.setString(5, patient.getAddress());
+            ps.setString(6, patient.getMedicalHistory());
+            ps.setDouble(7, advance);
+            ps.setInt(8, patient.getPatientId());
 
             return ps.executeUpdate() > 0;
 

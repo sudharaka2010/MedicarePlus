@@ -4,151 +4,248 @@ import com.medicareplus.dao.DoctorDAO;
 import com.medicareplus.model.Doctor;
 
 import javax.swing.*;
+import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
-import javax.swing.table.JTableHeader;
 import javax.swing.table.TableRowSorter;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public class DoctorManagementFrame extends JFrame {
 
-    private JTable table;
-    private DefaultTableModel model;
     private final DoctorDAO doctorDAO = new DoctorDAO();
 
-    private JTextField txtSearch;
+    private JTable table;
+    private DefaultTableModel model;
+    private UITheme.SearchField txtSearch;
     private TableRowSorter<DefaultTableModel> sorter;
+    private UITheme.Button btnEdit;
+    private UITheme.Button btnDelete;
+    private JLabel recordCount;
+    private UITheme.TableView tableView;
 
     public DoctorManagementFrame() {
-        setTitle("MediCare Plus - Manage Doctors");
-        setSize(1100, 650);
-        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        setLocationRelativeTo(null);
+        UITheme.configureFrame(this, "Doctors", 1140, 690);
 
-        // Root background (soft gradient like dashboard)
-        JPanel root = new GradientPanel();
+        UITheme.BackgroundPanel root = new UITheme.BackgroundPanel();
         root.setLayout(new BorderLayout(18, 18));
-        root.setBorder(new EmptyBorder(22, 22, 22, 22));
+        root.setBorder(new EmptyBorder(24, 26, 24, 26));
 
-        // ---------- Header ----------
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        txtSearch = UITheme.searchField("Search doctors");
+        txtSearch.setPreferredSize(new Dimension(330, 40));
+        txtSearch.setToolTipText(
+                "Search by doctor ID, name, specialty, contact or availability (Ctrl/Cmd+F)");
+        txtSearch.getAccessibleContext().setAccessibleName("Search doctors");
+        txtSearch.getAccessibleContext().setAccessibleDescription(
+                "Filters the doctor table as you type");
+        installTextFocus(txtSearch);
 
-        JLabel title = new JLabel("Doctor Management");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 28));
-        title.setForeground(new Color(25, 25, 25));
+        JPanel searchControl = new JPanel(new BorderLayout(8, 0));
+        searchControl.setOpaque(false);
+        JLabel searchIcon = new JLabel(UITheme.icon(
+                UITheme.IconType.SEARCH, 18, UITheme.TEXT_MUTED));
+        searchIcon.setLabelFor(txtSearch);
+        searchIcon.setToolTipText("Search doctors");
+        searchControl.add(searchIcon, BorderLayout.WEST);
+        searchControl.add(txtSearch, BorderLayout.CENTER);
 
-        JLabel subtitle = new JLabel("Manage doctors, specialties and availability");
-        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        subtitle.setForeground(new Color(80, 80, 80));
+        root.add(UITheme.createHeader(
+                "Doctor management",
+                "Maintain specialties, contact details and clinical availability.",
+                searchControl
+        ), BorderLayout.NORTH);
 
-        JPanel titleBox = new JPanel();
-        titleBox.setOpaque(false);
-        titleBox.setLayout(new BoxLayout(titleBox, BoxLayout.Y_AXIS));
-        titleBox.add(title);
-        titleBox.add(Box.createVerticalStrut(4));
-        titleBox.add(subtitle);
+        UITheme.CardPanel card = new UITheme.CardPanel();
+        card.setLayout(new BorderLayout(0, 14));
 
-        header.add(titleBox, BorderLayout.WEST);
+        UITheme.Button btnAdd = UITheme.button(
+                "Add doctor", UITheme.IconType.ADD, UITheme.ButtonStyle.PRIMARY);
+        btnEdit = UITheme.button(
+                "Edit", UITheme.IconType.EDIT, UITheme.ButtonStyle.SECONDARY);
+        btnDelete = UITheme.button(
+                "Delete", UITheme.IconType.DELETE, UITheme.ButtonStyle.DANGER);
+        UITheme.Button btnRefresh = UITheme.button(
+                "Refresh", UITheme.IconType.REFRESH, UITheme.ButtonStyle.GHOST);
 
-        // Search box (right)
-        JPanel searchBox = new JPanel(new BorderLayout(8, 8));
-        searchBox.setOpaque(false);
+        btnAdd.setMnemonic(KeyEvent.VK_A);
+        btnEdit.setMnemonic(KeyEvent.VK_E);
+        btnDelete.setMnemonic(KeyEvent.VK_D);
+        btnRefresh.setMnemonic(KeyEvent.VK_R);
 
-        JLabel searchLbl = new JLabel("Search:");
-        searchLbl.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        btnAdd.setToolTipText("Register a new doctor (Insert)");
+        btnEdit.setToolTipText("Edit the selected doctor (double-click a row)");
+        btnDelete.setToolTipText("Delete the selected doctor (Delete)");
+        btnRefresh.setToolTipText("Reload doctor records (Ctrl/Cmd+R)");
 
-        txtSearch = new JTextField();
-        txtSearch.setPreferredSize(new Dimension(280, 36));
-        txtSearch.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        txtSearch.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(210, 214, 222)),
-                new EmptyBorder(6, 10, 6, 10)
-        ));
+        btnAdd.getAccessibleContext().setAccessibleDescription(
+                "Opens the form for registering a doctor");
+        btnEdit.getAccessibleContext().setAccessibleDescription(
+                "Opens the selected doctor record for editing");
+        btnDelete.getAccessibleContext().setAccessibleDescription(
+                "Permanently deletes the selected doctor after confirmation");
+        btnRefresh.getAccessibleContext().setAccessibleDescription(
+                "Reloads doctor records from the database");
 
-        searchBox.add(searchLbl, BorderLayout.WEST);
-        searchBox.add(txtSearch, BorderLayout.CENTER);
+        btnEdit.setEnabled(false);
+        btnDelete.setEnabled(false);
 
-        header.add(searchBox, BorderLayout.EAST);
+        JPanel primaryActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        primaryActions.setOpaque(false);
+        primaryActions.add(btnAdd);
+        primaryActions.add(btnEdit);
+        primaryActions.add(btnDelete);
 
-        root.add(header, BorderLayout.NORTH);
+        JPanel toolbar = new JPanel(new BorderLayout(12, 0));
+        toolbar.setOpaque(false);
+        toolbar.add(primaryActions, BorderLayout.WEST);
+        toolbar.add(btnRefresh, BorderLayout.EAST);
+        card.add(toolbar, BorderLayout.NORTH);
 
-        // ---------- Center glass card ----------
-        RoundedPanel card = new RoundedPanel(22);
-        card.setLayout(new BorderLayout(14, 14));
-        card.setBackground(new Color(255, 255, 255, 210));
-        card.setBorder(new EmptyBorder(14, 14, 14, 14));
-
-        // Buttons row (top of card)
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        actions.setOpaque(false);
-
-        ModernButton btnAdd = new ModernButton("Add Doctor");
-        ModernButton btnEdit = new ModernButton("Edit Doctor");
-        ModernButton btnDelete = new ModernButton("Delete Doctor");
-        ModernButton btnRefresh = new ModernButton("Refresh");
-
-        actions.add(btnAdd);
-        actions.add(btnEdit);
-        actions.add(btnDelete);
-        actions.add(btnRefresh);
-
-        card.add(actions, BorderLayout.NORTH);
-
-        // Table model
         model = new DefaultTableModel(
-                new Object[]{"ID", "Full Name", "Specialty", "Phone", "Email", "Available Days", "Available Time"},
+                new Object[]{
+                        "ID", "Full name", "Specialty", "Phone", "Email",
+                        "Available days", "Available time"
+                },
                 0
         ) {
-            @Override public boolean isCellEditable(int row, int column) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
                 return false;
+            }
+
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                return columnIndex == 0 ? Integer.class : String.class;
             }
         };
 
         table = new JTable(model);
-        table.setRowHeight(30);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        table.setSelectionBackground(new Color(220, 232, 255));
-        table.setSelectionForeground(new Color(20, 20, 20));
-        table.setGridColor(new Color(230, 233, 240));
-        table.setShowVerticalLines(false);
+        UITheme.styleTable(table);
+        table.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
+        table.setToolTipText("Select a doctor to edit or delete. Double-click to edit.");
+        table.getAccessibleContext().setAccessibleName("Doctor records");
+        table.getAccessibleContext().setAccessibleDescription(
+                "Sortable doctor records table. Select one row for record actions.");
 
-        JTableHeader th = table.getTableHeader();
-        th.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        th.setBackground(new Color(245, 246, 250));
-        th.setForeground(new Color(40, 40, 40));
+        DefaultTableCellRenderer idRenderer = new UITheme.TableCellRenderer();
+        idRenderer.setHorizontalAlignment(SwingConstants.CENTER);
+        table.getColumnModel().getColumn(0).setCellRenderer(idRenderer);
 
-        JScrollPane sp = new JScrollPane(table);
-        sp.setBorder(BorderFactory.createLineBorder(new Color(230, 233, 240)));
-        card.add(sp, BorderLayout.CENTER);
+        UITheme.setColumnWidths(table, 58, 190, 165, 135, 210, 190, 155);
+        table.getColumnModel().getColumn(0).setMinWidth(48);
+        table.getColumnModel().getColumn(0).setMaxWidth(72);
 
-        root.add(card, BorderLayout.CENTER);
-
-        setContentPane(root);
-
-        // sorter (search filter)
         sorter = new TableRowSorter<>(model);
         table.setRowSorter(sorter);
+        sorter.addRowSorterListener(e -> updateRecordCount());
 
-        txtSearch.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { applyFilter(); }
-            @Override public void removeUpdate(DocumentEvent e) { applyFilter(); }
-            @Override public void changedUpdate(DocumentEvent e) { applyFilter(); }
-        });
+        tableView = new UITheme.TableView(
+                table,
+                UITheme.IconType.DOCTORS,
+                "No doctors yet",
+                "Add a doctor to begin managing the care team."
+        );
+        card.add(tableView, BorderLayout.CENTER);
 
-        // Actions
+        recordCount = UITheme.recordCountLabel();
+        JLabel tableHint = UITheme.mutedLabel("Double-click a row to edit");
+        JPanel footer = new JPanel(new BorderLayout());
+        footer.setOpaque(false);
+        footer.add(recordCount, BorderLayout.WEST);
+        footer.add(tableHint, BorderLayout.EAST);
+        card.add(footer, BorderLayout.SOUTH);
+
+        root.add(card, BorderLayout.CENTER);
+        setContentPane(root);
+
         btnAdd.addActionListener(e -> addDoctor());
         btnEdit.addActionListener(e -> editSelectedDoctor());
         btnDelete.addActionListener(e -> deleteSelectedDoctor());
         btnRefresh.addActionListener(e -> loadDoctors());
 
-        // Load data
+        table.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateSelectionActions();
+            }
+        });
+        table.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                    int viewRow = table.rowAtPoint(e.getPoint());
+                    if (viewRow >= 0) {
+                        table.setRowSelectionInterval(viewRow, viewRow);
+                        editSelectedDoctor();
+                    }
+                }
+            }
+        });
+
+        txtSearch.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyFilter();
+            }
+        });
+
+        installShortcuts(btnAdd, btnRefresh);
         loadDoctors();
+    }
+
+    private void installShortcuts(JButton btnAdd, JButton btnRefresh) {
+        int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask),
+                "focusDoctorSearch",
+                () -> {
+                    txtSearch.requestFocusInWindow();
+                    txtSearch.selectAll();
+                }
+        );
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_R, menuMask),
+                "refreshDoctors",
+                btnRefresh::doClick
+        );
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_INSERT, 0),
+                "addDoctor",
+                btnAdd::doClick
+        );
+        UITheme.bindShortcut(
+                getRootPane(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0),
+                "deleteDoctor",
+                () -> {
+                    if (btnDelete.isEnabled()) {
+                        btnDelete.doClick();
+                    }
+                }
+        );
     }
 
     private void applyFilter() {
@@ -156,243 +253,365 @@ public class DoctorManagementFrame extends JFrame {
         if (text.isEmpty()) {
             sorter.setRowFilter(null);
         } else {
-            sorter.setRowFilter(RowFilter.regexFilter("(?i)" + text));
+            sorter.setRowFilter(RowFilter.regexFilter(
+                    "(?iu)" + Pattern.quote(text)));
         }
+        updateRecordCount();
+        updateSelectionActions();
     }
 
     private void loadDoctors() {
         model.setRowCount(0);
         List<Doctor> doctors = doctorDAO.getAllDoctors();
 
-        for (Doctor d : doctors) {
+        for (Doctor doctor : doctors) {
             model.addRow(new Object[]{
-                    d.getDoctorId(),
-                    d.getFullName(),
-                    d.getSpecialty(),
-                    d.getPhone(),
-                    d.getEmail(),
-                    d.getAvailableDays(),
-                    d.getAvailableTime()
+                    doctor.getDoctorId(),
+                    doctor.getFullName(),
+                    doctor.getSpecialty(),
+                    doctor.getPhone(),
+                    doctor.getEmail(),
+                    doctor.getAvailableDays(),
+                    doctor.getAvailableTime()
             });
         }
+
+        updateRecordCount();
+        updateSelectionActions();
+    }
+
+    private void updateRecordCount() {
+        if (recordCount == null || table == null || model == null) {
+            return;
+        }
+
+        int visible = table.getRowCount();
+        int total = model.getRowCount();
+        if (visible == total) {
+            UITheme.setRecordCount(recordCount, total, "doctor", "doctors");
+        } else {
+            recordCount.setText(visible + " of " + total + " doctors");
+        }
+        tableView.updateState(total, visible);
+    }
+
+    private void updateSelectionActions() {
+        boolean selected = table != null && table.getSelectedRow() >= 0;
+        btnEdit.setEnabled(selected);
+        btnDelete.setEnabled(selected);
     }
 
     private void addDoctor() {
+        DoctorForm form = new DoctorForm("", "", "", "", "", "");
+        if (!showDoctorForm(form, "Add doctor")) {
+            return;
+        }
 
-        JTextField fullName = new JTextField();
-        JTextField specialty = new JTextField();
-        JTextField phone = new JTextField();
-        JTextField email = new JTextField();
-        JTextField availableDays = new JTextField();   // example: Mon,Wed,Fri
-        JTextField availableTime = new JTextField();   // example: 09:00-12:00
-
-        Object[] message = {
-                "Full Name:", fullName,
-                "Specialty:", specialty,
-                "Phone:", phone,
-                "Email:", email,
-                "Available Days (ex: Mon,Wed,Fri):", availableDays,
-                "Available Time (ex: 09:00-12:00):", availableTime
-        };
-
-        int option = JOptionPane.showConfirmDialog(
-                this, message, "Add Doctor", JOptionPane.OK_CANCEL_OPTION
+        Doctor doctor = new Doctor(
+                form.fullName(),
+                form.specialty(),
+                form.phone(),
+                form.email(),
+                form.availableDays(),
+                form.availableTime()
         );
 
-        if (option == JOptionPane.OK_OPTION) {
-
-            if (fullName.getText().trim().isEmpty() || specialty.getText().trim().isEmpty()) {
-                JOptionPane.showMessageDialog(this, "Full Name and Specialty are required!");
-                return;
-            }
-
-            Doctor d = new Doctor(
-                    fullName.getText().trim(),
-                    specialty.getText().trim(),
-                    phone.getText().trim(),
-                    email.getText().trim(),
-                    availableDays.getText().trim(),
-                    availableTime.getText().trim()
+        boolean success = doctorDAO.addDoctor(doctor);
+        if (success) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record was added successfully.",
+                    "Doctor added",
+                    JOptionPane.INFORMATION_MESSAGE
             );
-
-            boolean success = doctorDAO.addDoctor(d);
-
-            JOptionPane.showMessageDialog(this,
-                    success ? "Doctor added successfully!" : "Failed to add doctor!");
-
-            if (success) loadDoctors();
+            loadDoctors();
+        } else {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record could not be added. Please try again.",
+                    "Unable to add doctor",
+                    JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 
     private void editSelectedDoctor() {
-
         int viewRow = table.getSelectedRow();
-
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Please select a doctor row to edit!");
+        if (viewRow < 0) {
+            showNoSelection();
             return;
         }
 
         int row = table.convertRowIndexToModel(viewRow);
+        int id = ((Number) model.getValueAt(row, 0)).intValue();
 
-        int id = Integer.parseInt(model.getValueAt(row, 0).toString());
-
-        JTextField fullName = new JTextField(model.getValueAt(row, 1).toString());
-        JTextField specialty = new JTextField(model.getValueAt(row, 2).toString());
-        JTextField phone = new JTextField(model.getValueAt(row, 3).toString());
-        JTextField email = new JTextField(model.getValueAt(row, 4).toString());
-        JTextField availableDays = new JTextField(model.getValueAt(row, 5).toString());
-        JTextField availableTime = new JTextField(model.getValueAt(row, 6).toString());
-
-        Object[] message = {
-                "Full Name:", fullName,
-                "Specialty:", specialty,
-                "Phone:", phone,
-                "Email:", email,
-                "Available Days:", availableDays,
-                "Available Time:", availableTime
-        };
-
-        int option = JOptionPane.showConfirmDialog(
-                this, message, "Edit Doctor", JOptionPane.OK_CANCEL_OPTION
+        DoctorForm form = new DoctorForm(
+                cellText(row, 1),
+                cellText(row, 2),
+                cellText(row, 3),
+                cellText(row, 4),
+                cellText(row, 5),
+                cellText(row, 6)
         );
 
-        if (option == JOptionPane.OK_OPTION) {
+        if (!showDoctorForm(form, "Edit doctor")) {
+            return;
+        }
 
-            if (fullName.getText().trim().isEmpty() || specialty.getText().trim().isEmpty()) {
-                JOptionPane.showMessageDialog(this, "Full Name and Specialty are required!");
-                return;
-            }
+        Doctor updated = new Doctor(
+                id,
+                form.fullName(),
+                form.specialty(),
+                form.phone(),
+                form.email(),
+                form.availableDays(),
+                form.availableTime()
+        );
 
-            Doctor updated = new Doctor(
-                    id,
-                    fullName.getText().trim(),
-                    specialty.getText().trim(),
-                    phone.getText().trim(),
-                    email.getText().trim(),
-                    availableDays.getText().trim(),
-                    availableTime.getText().trim()
+        boolean success = doctorDAO.updateDoctor(updated);
+        if (success) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record was updated successfully.",
+                    "Doctor updated",
+                    JOptionPane.INFORMATION_MESSAGE
             );
-
-            boolean success = doctorDAO.updateDoctor(updated);
-
-            JOptionPane.showMessageDialog(this,
-                    success ? "Doctor updated successfully!" : "Failed to update doctor!");
-
-            if (success) loadDoctors();
+            loadDoctors();
+        } else {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record could not be updated. Please try again.",
+                    "Unable to update doctor",
+                    JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 
     private void deleteSelectedDoctor() {
-
         int viewRow = table.getSelectedRow();
-
-        if (viewRow == -1) {
-            JOptionPane.showMessageDialog(this, "Please select a doctor row to delete!");
+        if (viewRow < 0) {
+            showNoSelection();
             return;
         }
 
         int row = table.convertRowIndexToModel(viewRow);
+        int id = ((Number) model.getValueAt(row, 0)).intValue();
+        String name = cellText(row, 1);
 
-        int id = Integer.parseInt(model.getValueAt(row, 0).toString());
-        String name = model.getValueAt(row, 1).toString();
+        if (!UITheme.confirmDelete(this, "doctor \"" + name + "\"")) {
+            return;
+        }
 
-        int confirm = JOptionPane.showConfirmDialog(
-                this,
-                "Delete doctor: " + name + " ?",
-                "Confirm Delete",
-                JOptionPane.YES_NO_OPTION
-        );
-
-        if (confirm == JOptionPane.YES_OPTION) {
-            boolean success = doctorDAO.deleteDoctor(id);
-
-            JOptionPane.showMessageDialog(this,
-                    success ? "Doctor deleted successfully!" : "Failed to delete doctor!");
-
-            if (success) loadDoctors();
+        boolean success = doctorDAO.deleteDoctor(id);
+        if (success) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record was deleted.",
+                    "Doctor deleted",
+                    JOptionPane.INFORMATION_MESSAGE
+            );
+            loadDoctors();
+        } else {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "The doctor record could not be deleted. It may be linked to appointments.",
+                    "Unable to delete doctor",
+                    JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 
-    // ---------- UI Helpers ----------
-
-    static class GradientPanel extends JPanel {
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-
-            GradientPaint gp = new GradientPaint(0, 0, new Color(245, 246, 250),
-                    0, getHeight(), new Color(235, 238, 245));
-            g2.setPaint(gp);
-            g2.fillRect(0, 0, getWidth(), getHeight());
-            g2.dispose();
-        }
-    }
-
-    static class RoundedPanel extends JPanel {
-        private final int radius;
-
-        public RoundedPanel(int radius) {
-            this.radius = radius;
-            setOpaque(false);
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(getBackground());
-            g2.fillRoundRect(0, 0, getWidth(), getHeight(), radius, radius);
-            g2.dispose();
-            super.paintComponent(g);
-        }
-    }
-
-    static class ModernButton extends JButton {
-        private final Color base = new Color(32, 84, 240);
-        private final Color hover = new Color(22, 68, 215);
-        private final Color pressed = new Color(18, 55, 175);
-
-        public ModernButton(String text) {
-            super(text);
-
-            setFont(new Font("Segoe UI", Font.BOLD, 13));
-            setForeground(Color.WHITE);
-            setFocusPainted(false);
-            setBorderPainted(false);
-            setContentAreaFilled(false);
-            setOpaque(false);
-            setCursor(new Cursor(Cursor.HAND_CURSOR));
-            setPreferredSize(new Dimension(140, 38));
-
-            addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { repaint(); }
-                @Override public void mouseExited(MouseEvent e) { repaint(); }
-                @Override public void mousePressed(MouseEvent e) { repaint(); }
-                @Override public void mouseReleased(MouseEvent e) { repaint(); }
+    private boolean showDoctorForm(DoctorForm form, String title) {
+        while (true) {
+            SwingUtilities.invokeLater(() -> {
+                form.fullNameField.requestFocusInWindow();
+                form.fullNameField.selectAll();
             });
+
+            int option = JOptionPane.showConfirmDialog(
+                    this,
+                    form.panel,
+                    title,
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE
+            );
+
+            if (option != JOptionPane.OK_OPTION) {
+                return false;
+            }
+
+            if (form.fullName().isEmpty()) {
+                showValidation(
+                        form.fullNameField,
+                        "Enter the doctor's full name.",
+                        "Full name is required"
+                );
+                continue;
+            }
+            if (form.specialty().isEmpty()) {
+                showValidation(
+                        form.specialtyField,
+                        "Enter the doctor's clinical specialty.",
+                        "Specialty is required"
+                );
+                continue;
+            }
+            return true;
+        }
+    }
+
+    private void showValidation(JTextField field, String message, String title) {
+        JOptionPane.showMessageDialog(
+                this,
+                message,
+                title,
+                JOptionPane.WARNING_MESSAGE
+        );
+        field.requestFocusInWindow();
+        field.selectAll();
+    }
+
+    private void showNoSelection() {
+        JOptionPane.showMessageDialog(
+                this,
+                "Select a doctor record first.",
+                "No doctor selected",
+                JOptionPane.WARNING_MESSAGE
+        );
+    }
+
+    private String cellText(int row, int column) {
+        Object value = model.getValueAt(row, column);
+        return value == null ? "" : value.toString();
+    }
+
+    private JTextField createField(String value, String accessibleName, String tooltip) {
+        JTextField field = UITheme.textField();
+        field.setText(value);
+        field.setToolTipText(tooltip);
+        field.getAccessibleContext().setAccessibleName(accessibleName);
+        field.getAccessibleContext().setAccessibleDescription(tooltip);
+        installTextFocus(field);
+        return field;
+    }
+
+    private void installTextFocus(JTextComponent component) {
+        Border normal = BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UITheme.BORDER_STRONG),
+                new EmptyBorder(8, 11, 8, 11)
+        );
+        Border focused = BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UITheme.PRIMARY, 2),
+                new EmptyBorder(7, 10, 7, 10)
+        );
+        component.setBorder(normal);
+        component.setCaretColor(UITheme.PRIMARY);
+        component.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusGained(FocusEvent e) {
+                component.setBorder(focused);
+            }
+
+            @Override
+            public void focusLost(FocusEvent e) {
+                component.setBorder(normal);
+            }
+        });
+    }
+
+    private final class DoctorForm {
+        private final JPanel panel;
+        private final JTextField fullNameField;
+        private final JTextField specialtyField;
+        private final JTextField phoneField;
+        private final JTextField emailField;
+        private final JTextField availableDaysField;
+        private final JTextField availableTimeField;
+
+        private DoctorForm(
+                String fullName,
+                String specialty,
+                String phone,
+                String email,
+                String availableDays,
+                String availableTime
+        ) {
+            fullNameField = createField(
+                    fullName,
+                    "Full name, required",
+                    "Doctor's full professional name");
+            specialtyField = createField(
+                    specialty,
+                    "Specialty, required",
+                    "Clinical specialty, for example Cardiology");
+            phoneField = createField(
+                    phone,
+                    "Phone number",
+                    "Contact number, for example +94 77 123 4567");
+            emailField = createField(
+                    email,
+                    "Email address",
+                    "Professional email, for example doctor@example.com");
+            availableDaysField = createField(
+                    availableDays,
+                    "Available days",
+                    "Comma-separated days, for example Mon, Wed, Fri");
+            availableTimeField = createField(
+                    availableTime,
+                    "Available time",
+                    "Time range, for example 09:00 - 13:00");
+
+            UITheme.FormBuilder form = new UITheme.FormBuilder();
+            form.addField("Full name *", fullNameField);
+            form.addField(
+                    "Specialty *",
+                    specialtyField,
+                    "Example: Cardiology, Paediatrics or General Medicine");
+            form.addField("Phone", phoneField, "Example: +94 77 123 4567");
+            form.addField("Email", emailField, "Example: doctor@example.com");
+            form.addField(
+                    "Available days",
+                    availableDaysField,
+                    "Example: Mon, Wed, Fri");
+            form.addField(
+                    "Available time",
+                    availableTimeField,
+                    "Example: 09:00 - 13:00");
+
+            panel = new JPanel(new BorderLayout(0, 12));
+            panel.setOpaque(false);
+            panel.setBorder(new EmptyBorder(4, 4, 4, 4));
+            panel.add(UITheme.mutedLabel(
+                    "Fields marked with * are required. Use consistent availability formats."),
+                    BorderLayout.NORTH);
+            JScrollPane formScroll = UITheme.pageScroll(form);
+            formScroll.setPreferredSize(new Dimension(550, 360));
+            panel.add(formScroll, BorderLayout.CENTER);
+            panel.setPreferredSize(UITheme.dialogSize(590, 430));
         }
 
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        private String fullName() {
+            return fullNameField.getText().trim();
+        }
 
-            boolean isHover = getModel().isRollover();
-            boolean isPressed = getModel().isArmed();
+        private String specialty() {
+            return specialtyField.getText().trim();
+        }
 
-            Color c = isPressed ? pressed : (isHover ? hover : base);
+        private String phone() {
+            return phoneField.getText().trim();
+        }
 
-            g2.setColor(new Color(0, 0, 0, 25));
-            g2.fillRoundRect(3, 4, getWidth() - 6, getHeight() - 6, 14, 14);
+        private String email() {
+            return emailField.getText().trim();
+        }
 
-            g2.setColor(c);
-            g2.fillRoundRect(0, 0, getWidth() - 6, getHeight() - 6, 14, 14);
+        private String availableDays() {
+            return availableDaysField.getText().trim();
+        }
 
-            g2.dispose();
-            super.paintComponent(g);
+        private String availableTime() {
+            return availableTimeField.getText().trim();
         }
     }
 }
