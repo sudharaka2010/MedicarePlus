@@ -28,6 +28,12 @@ public class PatientManagementFrame extends JFrame {
 
     private static final DecimalFormat AMOUNT_FORMAT =
             new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(
+            "^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^\\+?[0-9][0-9 ()-]{6,19}$");
+    private static final Pattern NIC_PATTERN = Pattern.compile("^(?:[0-9]{9}[VvXx]|[0-9]{12})$");
 
     private final PatientDAO patientDAO = new PatientDAO();
 
@@ -288,7 +294,7 @@ public class PatientManagementFrame extends JFrame {
                     patient.getEmail(),
                     patient.getAddress(),
                     patient.getMedicalHistory(),
-                    patientDAO.getAdvanceByPatientId(patient.getPatientId())
+                    patient.getAdvancePaid()
             });
         }
 
@@ -334,7 +340,7 @@ public class PatientManagementFrame extends JFrame {
                 form.medicalHistory()
         );
 
-        boolean success = patientDAO.addPatient(patient, form.advance());
+        boolean success = patientDAO.addPatient(patient, form.advanceAmount());
         if (success) {
             JOptionPane.showMessageDialog(
                     this,
@@ -388,7 +394,7 @@ public class PatientManagementFrame extends JFrame {
                 form.medicalHistory()
         );
 
-        boolean success = patientDAO.updatePatient(updated, form.advance());
+        boolean success = patientDAO.updatePatient(updated, form.advanceAmount());
         if (success) {
             JOptionPane.showMessageDialog(
                     this,
@@ -469,8 +475,35 @@ public class PatientManagementFrame extends JFrame {
                 continue;
             }
 
+            if (!form.nic().isEmpty() && !NIC_PATTERN.matcher(form.nic()).matches()) {
+                showValidation(
+                        form.nicField,
+                        "Enter a valid NIC using 12 digits or 9 digits followed by V or X.",
+                        "Check NIC"
+                );
+                continue;
+            }
+
+            if (!form.phone().isEmpty() && !PHONE_PATTERN.matcher(form.phone()).matches()) {
+                showValidation(
+                        form.phoneField,
+                        "Enter a valid phone number with 7 to 20 characters.",
+                        "Check phone number"
+                );
+                continue;
+            }
+
+            if (!form.email().isEmpty() && !EMAIL_PATTERN.matcher(form.email()).matches()) {
+                showValidation(
+                        form.emailField,
+                        "Enter a valid email address, for example patient@example.com.",
+                        "Check email address"
+                );
+                continue;
+            }
+
             try {
-                form.advance();
+                form.advanceAmount();
             } catch (IllegalArgumentException ex) {
                 showValidation(
                         form.advanceField,
@@ -586,7 +619,7 @@ public class PatientManagementFrame extends JFrame {
         });
     }
 
-    private double parseAdvance(String value) {
+    private double parseAdvanceAmount(String value) {
         String normalized = value == null ? "" : value.trim().replace(",", "");
         if (normalized.isEmpty()) {
             return 0.0;
@@ -713,8 +746,8 @@ public class PatientManagementFrame extends JFrame {
             return medicalHistoryArea.getText().trim();
         }
 
-        private double advance() {
-            return parseAdvance(advanceField.getText());
+        private double advanceAmount() {
+            return parseAdvanceAmount(advanceField.getText());
         }
     }
 }

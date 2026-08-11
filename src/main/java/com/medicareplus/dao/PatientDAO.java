@@ -41,7 +41,8 @@ public class PatientDAO {
     public List<Patient> getAllPatients() {
 
         List<Patient> list = new ArrayList<>();
-        String sql = "SELECT patient_id, full_name, nic, phone, email, address, medical_history FROM patients";
+        String sql = "SELECT patient_id, full_name, nic, phone, email, address, medical_history, advance_paid " +
+                "FROM patients";
 
         try (Connection conn = DBConnection.getConnection();
              Statement stmt = conn.createStatement();
@@ -55,7 +56,8 @@ public class PatientDAO {
                         rs.getString("phone"),
                         rs.getString("email"),
                         rs.getString("address"),
-                        rs.getString("medical_history")
+                        rs.getString("medical_history"),
+                        rs.getDouble("advance_paid")
                 );
                 list.add(p);
             }
